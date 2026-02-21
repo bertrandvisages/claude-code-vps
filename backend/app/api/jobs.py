@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from pathlib import Path
 
@@ -17,24 +18,32 @@ from app.services.cost_estimator import estimate_job_cost
 from app.services.job_logger import subscribe, unsubscribe, format_sse
 from app.workers.video_pipeline import process_job
 
+logger = logging.getLogger("uvicorn.error")
+
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
 @router.post("/", response_model=JobResponse, status_code=201)
 async def create_job(data: JobCreate, db: AsyncSession = Depends(get_db)):
-    job = Job(
-        title=data.title,
-        description=data.description,
-        webhook_url=data.webhook_url,
-        voiceover_text=data.voiceover_text,
-        music_prompt=data.music_prompt,
-        include_music=data.include_music,
-        transition_type=data.transition_type,
-    )
-    db.add(job)
-    await db.commit()
-    await db.refresh(job)
-    return await _job_to_response(db, job)
+    logger.info(f"POST /jobs — creating job: title={data.title!r}, music={data.include_music}, music_prompt={data.music_prompt!r}")
+    try:
+        job = Job(
+            title=data.title,
+            description=data.description,
+            webhook_url=data.webhook_url,
+            voiceover_text=data.voiceover_text,
+            music_prompt=data.music_prompt,
+            include_music=data.include_music,
+            transition_type=data.transition_type,
+        )
+        db.add(job)
+        await db.commit()
+        await db.refresh(job)
+        logger.info(f"Job created: id={job.id}, status={job.status}")
+        return await _job_to_response(db, job)
+    except Exception as exc:
+        logger.exception(f"Job creation failed: {exc}")
+        raise
 
 
 @router.get("/", response_model=list[JobResponse])
