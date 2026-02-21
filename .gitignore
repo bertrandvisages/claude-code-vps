@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Env
+.env
+.env.local
+
+# DB
+*.db
+*.sqlite3
+
+# IDE & tools
+.vscode/
+.idea/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads & outputs
+backend/uploads/
+backend/outputs/
+
+# Credentials (Google service account, etc.)
+backend/credentials/
+credentials/
+*.json.key
+service-account*.json
+
+# Data
+backend/data/

@@ -1,0 +1,31 @@
+# Framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# Base de données (SQLite uniquement)
+sqlalchemy[asyncio]==2.0.36
+aiosqlite==0.20.0
+alembic==1.14.1
+
+# Validation / Config
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# Vidéo
+moviepy==2.1.2
+
+# APIs externes
+elevenlabs==2.36.1
+google-cloud-vision==3.8.1
+httpx==0.28.1
+PyJWT==2.10.1
+
+# Utils
+python-dotenv==1.0.1
+pillow==10.4.0
+aiofiles==24.1.0
+
+# Tests
+pytest==8.3.4
+pytest-asyncio==0.25.0
