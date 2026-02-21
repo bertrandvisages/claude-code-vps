@@ -38,7 +38,7 @@ export default function LiveLog({ jobId }: { jobId: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const baseURL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+    const baseURL = import.meta.env.VITE_API_URL || "";
     const es = new EventSource(`${baseURL}/api/v1/jobs/${jobId}/logs`);
 
     es.onopen = () => setConnected(true);
