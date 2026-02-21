@@ -1,4 +1,13 @@
+import base64
+import os
 from pathlib import Path
+
+# --- Google Vision credentials depuis base64 (Docker / VPS) ---
+_creds_b64 = os.environ.get("GOOGLE_CREDENTIALS_BASE64")
+if _creds_b64:
+    _creds_path = "/tmp/google-vision.json"
+    Path(_creds_path).write_bytes(base64.b64decode(_creds_b64))
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _creds_path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
