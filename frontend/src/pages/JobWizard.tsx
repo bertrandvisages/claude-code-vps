@@ -9,7 +9,6 @@ import {
   approveJob,
   processJob,
   uploadMusic,
-  deleteMusic,
 } from "../api/jobs";
 import PhotoUploader from "../components/PhotoUploader";
 import ProgressTracker from "../components/ProgressTracker";
@@ -63,7 +62,6 @@ export default function JobWizard() {
   const [musicSource, setMusicSource] = useState<"none" | "upload" | "suno">("none");
   const [musicFile, setMusicFile] = useState<File | null>(null);
   const [musicPrompt, setMusicPrompt] = useState("");
-  const [musicUploaded, setMusicUploaded] = useState(false);
   const musicInputRef = useRef<HTMLInputElement>(null);
 
   // Load existing job
@@ -137,7 +135,6 @@ export default function JobWizard() {
       if (musicSource === "upload" && musicFile) {
         const { data: updatedJob } = await uploadMusic(data.id, musicFile);
         setCurrentJob(updatedJob);
-        setMusicUploaded(true);
       } else {
         setCurrentJob(data);
       }
