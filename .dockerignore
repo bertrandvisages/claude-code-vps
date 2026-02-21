@@ -1,0 +1,13 @@
+node_modules
+frontend/dist
+.venv
+__pycache__
+*.pyc
+.env
+.env.local
+backend/uploads
+backend/outputs
+backend/data
+backend/credentials
+.git
+.claude
