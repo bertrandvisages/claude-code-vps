@@ -26,11 +26,11 @@ POST /api/v1/assemble (JSON de montage)
 ## Variables d'environnement
 | Variable | Usage |
 |---|---|
-| `SUPABASE_URL` | URL du projet Supabase |
-| `SUPABASE_SERVICE_KEY` | Clé service Supabase (accès Storage) |
 | `API_KEY` | Auth header `X-Api-Key` (vide = désactivé) |
 | `DATABASE_URL` | SQLite (défaut: `sqlite+aiosqlite:///./data/app.db`) |
 | `APP_ENV` | `production` ou `development` |
+
+Note : les credentials Supabase sont passées dans le body JSON de chaque requête.
 
 ## Structure du projet
 ```
@@ -75,31 +75,50 @@ Base URL : `/api/v1` — Auth : header `X-Api-Key`
 ### Format JSON `POST /assemble`
 ```json
 {
-  "job_id": "uuid",
-  "output_filename": "Hotel_Bellevue_Paris.mp4",
-  "resolution": "1920x1080",
-  "fps": 30,
-  "segments": [
-    {"order": 1, "video_url": "https://xxx.supabase.co/...", "duration_seconds": 7.5}
+  "hotel_id": "1",
+  "voiceover_url": "https://supabase.example.com/.../voiceover.mp3",
+  "music_url": "https://supabase.example.com/.../music.mp3",
+  "clips": [
+    {"index": 0, "video_url": "https://supabase.example.com/.../clip.mp4", "duree_secondes": 4}
   ],
-  "audio": {
-    "voiceover_url": "https://xxx.supabase.co/.../voiceover.mp3",
-    "music_url": "https://xxx.supabase.co/.../music.mp3",
-    "music_volume_base": 0.3
+  "audio_config": {
+    "voiceover_volume": 1.0,
+    "music_volume": 0.15,
+    "music_fade_in_seconds": 3,
+    "music_fade_out_seconds": 5,
+    "sidechain_threshold": 0.02,
+    "sidechain_ratio": 6,
+    "sidechain_attack": 200,
+    "sidechain_release": 1000
   },
-  "output_storage": {
-    "supabase_bucket": "outputs",
-    "supabase_path": "montages/uuid/final.mp4"
+  "video_config": {
+    "width": 1920, "height": 1080, "fps": 30,
+    "codec": "libx264", "preset": "fast", "crf": 23
+  },
+  "supabase": {
+    "url": "https://supabase.example.com",
+    "service_key": "...",
+    "bucket": "hotel-videos"
   }
 }
+```
+
+### Réponse `POST /assemble` (202)
+```json
+{"job_id": "uuid-generated", "status": "processing"}
+```
+
+### Réponse `GET /jobs/{id}/status`
+```json
+{"job_id": "uuid", "status": "completed", "output_url": "https://...", "error_message": null}
 ```
 
 ## FFmpeg — Ducking audio
 Quand voix off + musique sont présents, le filtre `sidechaincompress`
 réduit automatiquement le volume de la musique quand la voix est active.
-- `music_volume_base` : volume de la musique quand la voix parle (défaut 0.3)
-- Transitions douces 0.5s (attack/release du compresseur)
-- Quand silence détecté, musique remonte à son niveau de base
+- Tous les paramètres de ducking sont configurables via `audio_config`
+- Fade in/out sur la musique (défaut 3s/5s)
+- Quand silence détecté, musique remonte à `music_volume`
 
 ## Conventions de développement
 - Toujours travailler en mode plan d'abord

@@ -8,9 +8,6 @@ class Settings(BaseSettings):
     API_KEY: str = ""
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/app.db"
 
-    SUPABASE_URL: str = ""
-    SUPABASE_SERVICE_KEY: str = ""
-
     class Config:
         env_file = ".env"
 

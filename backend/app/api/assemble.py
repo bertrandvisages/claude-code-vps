@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -24,19 +25,16 @@ async def assemble(
     db: AsyncSession = Depends(get_db),
 ):
     """Reçoit un JSON de montage et lance l'assemblage en tâche de fond."""
-    # Vérifier qu'un job avec cet ID n'existe pas déjà
-    existing = await db.execute(select(Job).where(Job.id == data.job_id))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail=f"Job {data.job_id} already exists")
+    job_id = str(uuid.uuid4())
 
-    job = Job(id=data.job_id, status="processing")
+    job = Job(id=job_id, status="processing")
     db.add(job)
     await db.commit()
 
-    logger.info(f"Job {data.job_id} created — {len(data.segments)} segments, launching pipeline")
-    background_tasks.add_task(run_assembly, data.job_id, data)
+    logger.info(f"Job {job_id} created — hotel_id={data.hotel_id}, {len(data.clips)} clips, launching pipeline")
+    background_tasks.add_task(run_assembly, job_id, data)
 
-    return AssembleResponse(job_id=data.job_id, status="processing")
+    return AssembleResponse(job_id=job_id, status="processing")
 
 
 @router.get("/jobs/{job_id}/status", response_model=JobStatusResponse)

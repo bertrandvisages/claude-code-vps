@@ -31,10 +31,11 @@ async def run_assembly(job_id: str, request: AssembleRequest) -> None:
 
         # 2. Upload vers Supabase
         emit(job_id, "pipeline", "info", "Upload vers Supabase Storage...")
+        storage_path = f"montages/{request.hotel_id}/{output_path.name}"
         public_url = await upload_to_supabase(
             output_path,
-            request.output_storage.supabase_bucket,
-            request.output_storage.supabase_path,
+            storage_path,
+            request.supabase,
         )
 
         # 3. Mettre à jour le job en DB
@@ -61,6 +62,5 @@ async def run_assembly(job_id: str, request: AssembleRequest) -> None:
                 await db.commit()
 
     finally:
-        # Cleanup du dossier temporaire
         if work_dir.exists():
             shutil.rmtree(work_dir, ignore_errors=True)

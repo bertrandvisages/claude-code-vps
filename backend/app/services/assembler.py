@@ -1,13 +1,12 @@
 """Assemblage vidéo via FFmpeg : download, speed adjust, concat, audio ducking."""
 
-import asyncio
 import logging
 import subprocess
 from pathlib import Path
 
 import httpx
 
-from app.schemas.assemble import AssembleRequest
+from app.schemas.assemble import AssembleRequest, AudioConfig, VideoConfig
 from app.services.job_logger import emit
 
 logger = logging.getLogger("uvicorn.error")
@@ -43,47 +42,50 @@ def get_duration(file_path: Path) -> float:
 
 async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) -> Path:
     """Pipeline complet d'assemblage vidéo."""
-    segments = sorted(request.segments, key=lambda s: s.order)
-    width, height = request.resolution.split("x")
+    clips = sorted(request.clips, key=lambda c: c.index)
+    vc = request.video_config
+    ac = request.audio_config
 
     # --- 1. Télécharger les clips ---
-    emit(job_id, "pipeline", "info", f"Téléchargement de {len(segments)} clips...")
+    emit(job_id, "pipeline", "info", f"Téléchargement de {len(clips)} clips...")
     clip_paths: list[Path] = []
-    for i, seg in enumerate(segments):
+    for i, clip in enumerate(clips):
         dest = work_dir / f"clip_{i:03d}.mp4"
-        await download_file(seg.video_url, dest)
+        await download_file(clip.video_url, dest)
         clip_paths.append(dest)
-        emit(job_id, "pipeline", "info", f"Clip {i + 1}/{len(segments)} téléchargé")
+        emit(job_id, "pipeline", "info", f"Clip {i + 1}/{len(clips)} téléchargé")
 
     # --- 2. Speed adjust + resize chaque clip ---
     emit(job_id, "ffmpeg", "info", "Ajustement vitesse et résolution des clips...")
     adjusted_paths: list[Path] = []
-    for i, (clip_path, seg) in enumerate(zip(clip_paths, segments)):
+    for i, (clip_path, clip) in enumerate(zip(clip_paths, clips)):
         adjusted = work_dir / f"adj_{i:03d}.mp4"
         actual_duration = get_duration(clip_path)
-        target_duration = seg.duration_seconds
+        target_duration = clip.duree_secondes
 
-        # Facteur PTS : >1 = ralentir, <1 = accélérer
         pts_factor = target_duration / actual_duration
-
-        # atempo accepte seulement [0.5, 100.0], et il faut chaîner pour les valeurs extrêmes
         atempo = 1.0 / pts_factor
         atempo_filters = _build_atempo_chain(atempo)
 
-        vf = f"setpts={pts_factor}*PTS,scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+        vf = (
+            f"setpts={pts_factor}*PTS,"
+            f"scale={vc.width}:{vc.height}:force_original_aspect_ratio=decrease,"
+            f"pad={vc.width}:{vc.height}:(ow-iw)/2:(oh-ih)/2"
+        )
 
         run_ffmpeg(
             ["-i", str(clip_path),
              "-vf", vf,
              "-af", atempo_filters,
-             "-r", str(request.fps),
-             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-             "-c:a", "aac", "-b:a", "192k",
+             "-r", str(vc.fps),
+             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf),
+             "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
+             "-ar", str(ac.resample_rate),
              str(adjusted)],
             desc=f"adjust clip {i + 1}",
         )
         adjusted_paths.append(adjusted)
-        emit(job_id, "ffmpeg", "info", f"Clip {i + 1}/{len(segments)} : {actual_duration:.1f}s → {target_duration:.1f}s")
+        emit(job_id, "ffmpeg", "info", f"Clip {i + 1}/{len(clips)} : {actual_duration:.1f}s → {target_duration:.1f}s")
 
     # --- 3. Concaténer les clips (cut franc) ---
     emit(job_id, "ffmpeg", "info", "Concaténation des clips...")
@@ -99,23 +101,20 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
     emit(job_id, "ffmpeg", "success", f"Vidéo concaténée : {total_duration:.1f}s")
 
     # --- 4. Audio (voiceover + musique avec ducking) ---
-    output_path = work_dir / request.output_filename
-    audio = request.audio
+    output_filename = f"hotel_{request.hotel_id}.mp4"
+    output_path = work_dir / output_filename
 
-    if audio and (audio.voiceover_url or audio.music_url):
-        output_path = await _mix_audio(
-            job_id, work_dir, concat_video, audio.voiceover_url, audio.music_url,
-            audio.music_volume_base, total_duration, request, output_path,
-        )
+    if request.voiceover_url or request.music_url:
+        await _mix_audio(job_id, work_dir, concat_video, request, total_duration, output_path)
     else:
-        # Pas d'audio externe — garder l'audio des clips
         emit(job_id, "ffmpeg", "info", "Pas d'audio externe, conservation audio clips")
         run_ffmpeg(
-            ["-i", str(concat_video), "-c", "copy", str(output_path)],
+            ["-i", str(concat_video), "-c", "copy",
+             "-movflags", vc.movflags, str(output_path)],
             desc="copy final",
         )
 
-    emit(job_id, "pipeline", "success", f"Vidéo finale : {request.output_filename}")
+    emit(job_id, "pipeline", "success", f"Vidéo finale : {output_filename}")
     return output_path
 
 
@@ -123,38 +122,46 @@ async def _mix_audio(
     job_id: str,
     work_dir: Path,
     video_path: Path,
-    voiceover_url: str | None,
-    music_url: str | None,
-    music_volume_base: float,
-    total_duration: float,
     request: AssembleRequest,
+    total_duration: float,
     output_path: Path,
-) -> Path:
+) -> None:
     """Télécharge et mixe voix off + musique avec ducking automatique."""
-    width, height = request.resolution.split("x")
+    ac = request.audio_config
+    vc = request.video_config
 
     vo_path = None
     music_path = None
 
-    if voiceover_url:
+    if request.voiceover_url:
         emit(job_id, "pipeline", "info", "Téléchargement voix off...")
         vo_path = work_dir / "voiceover.mp3"
-        await download_file(voiceover_url, vo_path)
+        await download_file(request.voiceover_url, vo_path)
 
-    if music_url:
+    if request.music_url:
         emit(job_id, "pipeline", "info", "Téléchargement musique...")
         music_path = work_dir / "music.mp3"
-        await download_file(music_url, music_path)
+        await download_file(request.music_url, music_path)
 
     if vo_path and music_path:
-        # Ducking : sidechaincompress
-        emit(job_id, "ffmpeg", "info", f"Mixage audio avec ducking (musique base: {music_volume_base})...")
+        # Ducking : sidechaincompress avec paramètres de audio_config
+        emit(job_id, "ffmpeg", "info",
+             f"Mixage audio avec ducking (music_volume={ac.music_volume}, "
+             f"threshold={ac.sidechain_threshold}, ratio={ac.sidechain_ratio})")
+
+        fade_in = f"afade=t=in:d={ac.music_fade_in_seconds}," if ac.music_fade_in_seconds > 0 else ""
+        fade_out_start = max(0, total_duration - ac.music_fade_out_seconds)
+        fade_out = f"afade=t=out:st={fade_out_start}:d={ac.music_fade_out_seconds}," if ac.music_fade_out_seconds > 0 else ""
+
         filter_complex = (
-            f"[1:a]apad=whole_dur={total_duration}[vo];"
+            f"[1:a]volume={ac.voiceover_volume},apad=whole_dur={total_duration},"
+            f"aresample={ac.resample_rate}[vo];"
             f"[2:a]aloop=loop=-1:size=2e+09,atrim=0:{total_duration},"
-            f"volume={music_volume_base}[music_base];"
+            f"{fade_in}{fade_out}"
+            f"volume={ac.music_volume},aresample={ac.resample_rate}[music_base];"
             f"[music_base][vo]sidechaincompress="
-            f"threshold=0.015:ratio=10:attack=500:release=500:"
+            f"threshold={ac.sidechain_threshold}:ratio={ac.sidechain_ratio}:"
+            f"attack={ac.sidechain_attack}:release={ac.sidechain_release}:"
             f"level_in=1:level_sc=1[ducked];"
             f"[vo][ducked]amix=inputs=2:duration=first:normalize=0[aout]"
         )
@@ -162,8 +169,9 @@ async def _mix_audio(
             ["-i", str(video_path), "-i", str(vo_path), "-i", str(music_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[aout]",
-             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-             "-c:a", "aac", "-b:a", "192k",
+             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf),
+             "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
+             "-movflags", vc.movflags,
              "-shortest",
              str(output_path)],
             desc="audio ducking mix",
@@ -174,7 +182,9 @@ async def _mix_audio(
         run_ffmpeg(
             ["-i", str(video_path), "-i", str(vo_path),
              "-map", "0:v", "-map", "1:a",
-             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+             "-c:v", "copy",
+             "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
+             "-movflags", vc.movflags,
              "-shortest",
              str(output_path)],
             desc="voiceover only",
@@ -182,20 +192,25 @@ async def _mix_audio(
 
     elif music_path:
         emit(job_id, "ffmpeg", "info", "Ajout musique de fond...")
+        fade_in = f"afade=t=in:d={ac.music_fade_in_seconds}," if ac.music_fade_in_seconds > 0 else ""
+        fade_out_start = max(0, total_duration - ac.music_fade_out_seconds)
+        fade_out = f"afade=t=out:st={fade_out_start}:d={ac.music_fade_out_seconds}," if ac.music_fade_out_seconds > 0 else ""
+
         filter_complex = (
             f"[1:a]aloop=loop=-1:size=2e+09,atrim=0:{total_duration},"
-            f"volume={music_volume_base},afade=t=out:st={max(0, total_duration - 3)}:d=3[music]"
+            f"{fade_in}{fade_out}"
+            f"volume={ac.music_volume},aresample={ac.resample_rate}[music]"
         )
         run_ffmpeg(
             ["-i", str(video_path), "-i", str(music_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[music]",
-             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+             "-c:v", "copy",
+             "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
+             "-movflags", vc.movflags,
              str(output_path)],
             desc="music only",
         )
-
-    return output_path
 
 
 def _build_atempo_chain(factor: float) -> str:
@@ -203,7 +218,6 @@ def _build_atempo_chain(factor: float) -> str:
     if 0.5 <= factor <= 100.0:
         return f"atempo={factor}"
 
-    # Chaîner des atempo pour les facteurs extrêmes
     filters = []
     remaining = factor
     while remaining < 0.5:

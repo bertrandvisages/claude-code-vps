@@ -1,31 +1,50 @@
 from pydantic import BaseModel
 
 
-class Segment(BaseModel):
-    order: int
+class Clip(BaseModel):
+    index: int
     video_url: str
-    duration_seconds: float
+    duree_secondes: float
 
 
-class Audio(BaseModel):
-    voiceover_url: str | None = None
-    music_url: str | None = None
-    music_volume_base: float = 0.3
+class AudioConfig(BaseModel):
+    voiceover_volume: float = 1.0
+    music_volume: float = 0.15
+    music_fade_in_seconds: float = 3
+    music_fade_out_seconds: float = 5
+    sidechain_threshold: float = 0.02
+    sidechain_ratio: float = 6
+    sidechain_attack: float = 200
+    sidechain_release: float = 1000
+    resample_rate: int = 44100
+    output_codec: str = "aac"
+    output_bitrate: str = "192k"
 
 
-class OutputStorage(BaseModel):
-    supabase_bucket: str
-    supabase_path: str
+class VideoConfig(BaseModel):
+    width: int = 1920
+    height: int = 1080
+    fps: int = 30
+    codec: str = "libx264"
+    preset: str = "fast"
+    crf: int = 23
+    movflags: str = "+faststart"
+
+
+class SupabaseConfig(BaseModel):
+    url: str
+    service_key: str
+    bucket: str
 
 
 class AssembleRequest(BaseModel):
-    job_id: str
-    output_filename: str
-    resolution: str = "1920x1080"
-    fps: int = 30
-    segments: list[Segment]
-    audio: Audio | None = None
-    output_storage: OutputStorage
+    hotel_id: str
+    voiceover_url: str | None = None
+    music_url: str | None = None
+    clips: list[Clip]
+    audio_config: AudioConfig = AudioConfig()
+    video_config: VideoConfig = VideoConfig()
+    supabase: SupabaseConfig
 
 
 class AssembleResponse(BaseModel):
