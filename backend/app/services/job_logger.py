@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from typing import Literal
 
-ServiceName = Literal["vision", "elevenlabs", "kie", "ffmpeg", "pipeline"]
+ServiceName = Literal["ffmpeg", "pipeline", "supabase"]
 LogLevel = Literal["info", "success", "warning", "error"]
 
 # Subscribers : job_id → liste de queues SSE

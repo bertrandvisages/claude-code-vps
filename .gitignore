@@ -6,10 +6,6 @@ __pycache__/
 *.egg-info/
 dist/
 
-# Node
-node_modules/
-frontend/dist/
-
 # Env
 .env
 .env.local
@@ -27,15 +23,6 @@ frontend/dist/
 .DS_Store
 Thumbs.db
 
-# Uploads & outputs
-backend/uploads/
-backend/outputs/
-
-# Credentials (Google service account, etc.)
-backend/credentials/
-credentials/
-*.json.key
-service-account*.json
-
-# Data
+# Runtime data
 backend/data/
+backend/tmp/

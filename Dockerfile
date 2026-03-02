@@ -1,13 +1,3 @@
-# --- Stage 1 : build frontend Vite ---
-FROM node:20-slim AS frontend-builder
-
-WORKDIR /build
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
-COPY frontend/ .
-RUN npm run build
-
-# --- Stage 2 : backend Python + frontend statique ---
 FROM python:3.11-slim
 
 RUN apt-get update && \
@@ -21,10 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ .
 
-# Build frontend → servi par FastAPI
-COPY --from=frontend-builder /build/dist ./static/frontend/
-
-RUN mkdir -p uploads outputs data credentials
+RUN mkdir -p data tmp
 
 EXPOSE 8000
 
