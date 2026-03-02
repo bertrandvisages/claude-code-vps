@@ -31,12 +31,6 @@ class VideoConfig(BaseModel):
     movflags: str = "+faststart"
 
 
-class SupabaseConfig(BaseModel):
-    url: str
-    service_key: str
-    bucket: str
-
-
 class AssembleRequest(BaseModel):
     hotel_id: str
     voiceover_url: str | None = None
@@ -44,7 +38,6 @@ class AssembleRequest(BaseModel):
     clips: list[Clip]
     audio_config: AudioConfig = AudioConfig()
     video_config: VideoConfig = VideoConfig()
-    supabase: SupabaseConfig
 
 
 class AssembleResponse(BaseModel):

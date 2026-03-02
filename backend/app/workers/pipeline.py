@@ -32,11 +32,7 @@ async def run_assembly(job_id: str, request: AssembleRequest) -> None:
         # 2. Upload vers Supabase
         emit(job_id, "pipeline", "info", "Upload vers Supabase Storage...")
         storage_path = f"montages/{request.hotel_id}/{output_path.name}"
-        public_url = await upload_to_supabase(
-            output_path,
-            storage_path,
-            request.supabase,
-        )
+        public_url = await upload_to_supabase(output_path, storage_path)
 
         # 3. Mettre à jour le job en DB
         async with async_session() as db:
