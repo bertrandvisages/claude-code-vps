@@ -13,11 +13,13 @@ logger = logging.getLogger("uvicorn.error")
 
 
 async def download_file(url: str, dest: Path) -> Path:
-    """Télécharge un fichier depuis une URL vers le chemin local."""
-    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        dest.write_bytes(resp.content)
+    """Télécharge un fichier en streaming depuis une URL vers le chemin local."""
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True, verify=False) as client:
+        async with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            with open(dest, "wb") as f:
+                async for chunk in resp.aiter_bytes(chunk_size=65536):
+                    f.write(chunk)
     return dest
 
 
