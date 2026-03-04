@@ -38,6 +38,7 @@ class AssembleRequest(BaseModel):
     clips: list[Clip]
     audio_config: AudioConfig = AudioConfig()
     video_config: VideoConfig = VideoConfig()
+    webhook_url: str | None = None
 
 
 class AssembleResponse(BaseModel):
