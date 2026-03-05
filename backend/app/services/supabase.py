@@ -19,9 +19,12 @@ async def upload_to_supabase(file_path: Path, storage_path: str) -> str:
         "x-upsert": "true",
     }
 
-    async with httpx.AsyncClient(timeout=300) as client:
+    logger.info(f"Uploading to Supabase: {url}")
+    async with httpx.AsyncClient(timeout=300, verify=False) as client:
         with open(file_path, "rb") as f:
             resp = await client.post(url, content=f.read(), headers=headers)
+        if resp.status_code >= 400:
+            logger.error(f"Supabase upload failed ({resp.status_code}): {resp.text}")
         resp.raise_for_status()
 
     public_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/{settings.SUPABASE_BUCKET}/{storage_path}"
