@@ -157,15 +157,15 @@ async def _mix_audio(
 
         filter_complex = (
             f"[1:a]volume={ac.voiceover_volume},apad=whole_dur={total_duration},"
-            f"aresample={ac.resample_rate}[vo];"
+            f"aresample={ac.resample_rate},asplit=2[vo_sc][vo_mix];"
             f"[2:a]aloop=loop=-1:size=2e+09,atrim=0:{total_duration},"
             f"{fade_in}{fade_out}"
             f"volume={ac.music_volume},aresample={ac.resample_rate}[music_base];"
-            f"[music_base][vo]sidechaincompress="
+            f"[music_base][vo_sc]sidechaincompress="
             f"threshold={ac.sidechain_threshold}:ratio={ac.sidechain_ratio}:"
             f"attack={ac.sidechain_attack}:release={ac.sidechain_release}:"
             f"level_in=1:level_sc=1[ducked];"
-            f"[vo][ducked]amix=inputs=2:duration=first:normalize=0[aout]"
+            f"[vo_mix][ducked]amix=inputs=2:duration=first:normalize=0[aout]"
         )
         run_ffmpeg(
             ["-i", str(video_path), "-i", str(vo_path), "-i", str(music_path),
