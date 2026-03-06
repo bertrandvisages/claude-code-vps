@@ -106,7 +106,7 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
     output_filename = f"hotel_{request.hotel_id}.mp4"
     output_path = work_dir / output_filename
 
-    if request.voiceover_url or request.music_url:
+    if request.voiceover_url or request.voiceover_segments or request.music_url:
         await _mix_audio(job_id, work_dir, concat_video, request, total_duration, output_path)
     else:
         emit(job_id, "ffmpeg", "info", "Pas d'audio externe, conservation audio clips")
@@ -118,6 +118,39 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
 
     emit(job_id, "pipeline", "success", f"Vidéo finale : {output_filename}")
     return output_path
+
+
+def _build_segments_filter(
+    segments: list,
+    vo_input_idx: int,
+) -> str:
+    """Construit le filtre FFmpeg pour découper et positionner les segments voix off.
+
+    Utilise atrim pour découper un seul fichier audio (input vo_input_idx)
+    et adelay pour positionner chaque segment dans la timeline vidéo.
+    Produit une piste [voice].
+    """
+    parts = []
+    labels = []
+    for i, seg in enumerate(segments):
+        label = f"vo{i}"
+        delay_ms = int(seg.start_seconds * 1000)
+        delay_part = f",adelay={delay_ms}|{delay_ms}" if delay_ms > 0 else ""
+        parts.append(
+            f"[{vo_input_idx}:a]atrim=start={seg.in_seconds}:end={seg.out_seconds},"
+            f"asetpts=PTS-STARTPTS{delay_part}[{label}]"
+        )
+        labels.append(f"[{label}]")
+
+    if len(segments) == 1:
+        # Un seul segment, renommer directement
+        return parts[0].replace(f"[{labels[0][1:-1]}]", "[voice]")
+
+    mix_inputs = "".join(labels)
+    parts.append(
+        f"{mix_inputs}amix=inputs={len(segments)}:duration=longest:dropout_transition=0[voice]"
+    )
+    return ";".join(parts)
 
 
 async def _mix_audio(
@@ -145,8 +178,67 @@ async def _mix_audio(
         music_path = work_dir / "music.mp3"
         await download_file(request.music_url, music_path)
 
-    if vo_path and music_path:
-        # Ducking : sidechaincompress avec paramètres de audio_config
+    segments = request.voiceover_segments
+
+    # --- Segments (atrim) + musique (ducking) ---
+    if vo_path and segments and music_path:
+        emit(job_id, "ffmpeg", "info",
+             f"Mixage {len(segments)} segments voix off + musique avec ducking "
+             f"(music_volume={ac.music_volume})")
+
+        fade_in = f"afade=t=in:st=0:d={ac.music_fade_in_seconds}," if ac.music_fade_in_seconds > 0 else ""
+        fade_out_start = max(0, total_duration - ac.music_fade_out_seconds)
+        fade_out = f"afade=t=out:st={fade_out_start}:d={ac.music_fade_out_seconds}," if ac.music_fade_out_seconds > 0 else ""
+
+        # input 0=video, 1=voiceover, 2=music
+        seg_filter = _build_segments_filter(segments, 1)
+
+        filter_complex = (
+            f"{seg_filter};"
+            f"[voice]asplit=2[vo_sc][vo_mix];"
+            f"[2:a]aloop=loop=-1:size=2e+09,atrim=0:{total_duration},"
+            f"asetpts=PTS-STARTPTS,{fade_in}{fade_out}"
+            f"volume={ac.music_volume},aresample={ac.resample_rate}[music];"
+            f"[music][vo_sc]sidechaincompress="
+            f"threshold={ac.sidechain_threshold}:ratio={ac.sidechain_ratio}:"
+            f"attack={ac.sidechain_attack}:release={ac.sidechain_release}[musicduck];"
+            f"[vo_mix][musicduck]amix=inputs=2:duration=longest:dropout_transition=2[aout]"
+        )
+
+        run_ffmpeg(
+            ["-i", str(video_path), "-i", str(vo_path), "-i", str(music_path),
+             "-filter_complex", filter_complex,
+             "-map", "0:v", "-map", "[aout]",
+             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf),
+             "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
+             "-movflags", vc.movflags,
+             "-shortest",
+             str(output_path)],
+            desc="segments + audio ducking mix",
+        )
+
+    # --- Segments (atrim) seuls (sans musique) ---
+    elif vo_path and segments:
+        emit(job_id, "ffmpeg", "info",
+             f"Mixage {len(segments)} segments voix off (sans musique)...")
+
+        seg_filter = _build_segments_filter(segments, 1)
+        filter_complex = seg_filter.replace("[voice]", "[aout]")
+
+        run_ffmpeg(
+            ["-i", str(video_path), "-i", str(vo_path),
+             "-filter_complex", filter_complex,
+             "-map", "0:v", "-map", "[aout]",
+             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf),
+             "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
+             "-movflags", vc.movflags,
+             "-shortest",
+             str(output_path)],
+            desc="voiceover segments only",
+        )
+
+    # --- Voiceover unique + musique (ducking) ---
+    elif vo_path and music_path:
         emit(job_id, "ffmpeg", "info",
              f"Mixage audio avec ducking (music_volume={ac.music_volume}, "
              f"threshold={ac.sidechain_threshold}, ratio={ac.sidechain_ratio})")
@@ -179,6 +271,7 @@ async def _mix_audio(
             desc="audio ducking mix",
         )
 
+    # --- Voiceover unique seul ---
     elif vo_path:
         emit(job_id, "ffmpeg", "info", "Ajout voix off (sans musique)...")
         run_ffmpeg(
@@ -192,6 +285,7 @@ async def _mix_audio(
             desc="voiceover only",
         )
 
+    # --- Musique seule ---
     elif music_path:
         emit(job_id, "ffmpeg", "info", "Ajout musique de fond...")
         fade_in = f"afade=t=in:d={ac.music_fade_in_seconds}," if ac.music_fade_in_seconds > 0 else ""

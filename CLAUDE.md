@@ -73,6 +73,8 @@ Base URL : `/api/v1` — Auth : header `X-Api-Key`
 | `GET` | `/health` | Health check (hors auth) |
 
 ### Format JSON `POST /assemble`
+
+#### Option A — Voix off fichier unique
 ```json
 {
   "hotel_id": "1",
@@ -83,23 +85,48 @@ Base URL : `/api/v1` — Auth : header `X-Api-Key`
   ],
   "audio_config": {
     "voiceover_volume": 1.0,
-    "music_volume": 0.15,
-    "music_fade_in_seconds": 3,
-    "music_fade_out_seconds": 5,
-    "sidechain_threshold": 0.02,
-    "sidechain_ratio": 6,
-    "sidechain_attack": 200,
-    "sidechain_release": 1000
-  },
-  "video_config": {
-    "width": 1920, "height": 1080, "fps": 30,
-    "codec": "libx264", "preset": "fast", "crf": 23
-  },
-  "supabase": {
-    "url": "https://supabase.example.com",
-    "service_key": "...",
-    "bucket": "hotel-videos"
+    "music_volume": 0.15
   }
+}
+```
+
+#### Option B — Segments voix off avec points de coupe
+```json
+{
+  "hotel_id": "1",
+  "voiceover_url": "https://supabase.example.com/.../voiceover_complet.mp3",
+  "voiceover_segments": [
+    {"in_seconds": 0, "out_seconds": 5.2, "start_seconds": 0},
+    {"in_seconds": 5.2, "out_seconds": 12.0, "start_seconds": 8.5},
+    {"in_seconds": 12.0, "out_seconds": 18.5, "start_seconds": 22.0}
+  ],
+  "music_url": "https://supabase.example.com/.../music.mp3",
+  "clips": [
+    {"index": 0, "video_url": "https://supabase.example.com/.../clip.mp4", "duree_secondes": 4}
+  ],
+  "audio_config": {
+    "voiceover_volume": 1.0,
+    "music_volume": 0.4
+  }
+}
+```
+
+> `voiceover_url` = fichier audio unique. `voiceover_segments` = points de coupe dans ce fichier.
+> `in_seconds`/`out_seconds` = découpe dans le fichier audio source (FFmpeg `atrim`).
+> `start_seconds` = position dans la timeline vidéo (FFmpeg `adelay`).
+> Les silences entre segments sont automatiques.
+
+#### Champs audio_config complets
+```json
+"audio_config": {
+  "voiceover_volume": 1.0,
+  "music_volume": 0.15,
+  "music_fade_in_seconds": 3,
+  "music_fade_out_seconds": 5,
+  "sidechain_threshold": 0.02,
+  "sidechain_ratio": 6,
+  "sidechain_attack": 200,
+  "sidechain_release": 1000
 }
 ```
 
@@ -119,6 +146,8 @@ réduit automatiquement le volume de la musique quand la voix est active.
 - Tous les paramètres de ducking sont configurables via `audio_config`
 - Fade in/out sur la musique (défaut 3s/5s)
 - Quand silence détecté, musique remonte à `music_volume`
+- Supporte `voiceover_url` seul (fichier complet) ou avec `voiceover_segments` (découpe + placement)
+- Les segments utilisent `atrim` (découpe) + `adelay` (placement) + `amix` (combinaison) avant ducking
 
 ## Conventions de développement
 - Toujours travailler en mode plan d'abord

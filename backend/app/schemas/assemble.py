@@ -1,10 +1,16 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class Clip(BaseModel):
     index: int
     video_url: str
     duree_secondes: float
+
+
+class VoiceoverSegment(BaseModel):
+    in_seconds: float = Field(ge=0)
+    out_seconds: float = Field(gt=0)
+    start_seconds: float = Field(ge=0)
 
 
 class AudioConfig(BaseModel):
@@ -34,11 +40,20 @@ class VideoConfig(BaseModel):
 class AssembleRequest(BaseModel):
     hotel_id: str
     voiceover_url: str | None = None
+    voiceover_segments: list[VoiceoverSegment] | None = None
     music_url: str | None = None
     clips: list[Clip]
     audio_config: AudioConfig = AudioConfig()
     video_config: VideoConfig = VideoConfig()
     webhook_url: str | None = None
+
+    @model_validator(mode="after")
+    def resolve_voiceover(self) -> "AssembleRequest":
+        if self.voiceover_segments is not None and len(self.voiceover_segments) == 0:
+            self.voiceover_segments = None
+        if self.voiceover_segments and not self.voiceover_url:
+            raise ValueError("voiceover_url est requis quand voiceover_segments est fourni")
+        return self
 
 
 class AssembleResponse(BaseModel):
