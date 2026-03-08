@@ -207,7 +207,7 @@ async def _mix_audio(
             f"[music][voice_sc_boosted]sidechaincompress="
             f"threshold={ac.sidechain_threshold}:ratio={ac.sidechain_ratio}:"
             f"attack={ac.sidechain_attack}:release={ac.sidechain_release}[musicduck];"
-            f"[voice_out][musicduck]amix=inputs=2:duration=longest:dropout_transition=2[aout]"
+            f"[voice_out][musicduck]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0[aout]"
         )
 
         run_ffmpeg(
