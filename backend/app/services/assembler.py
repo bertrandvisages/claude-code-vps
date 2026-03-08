@@ -123,12 +123,13 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
 def _build_segments_filter(
     segments: list,
     vo_input_idx: int,
+    ac: AudioConfig,
 ) -> str:
     """Construit le filtre FFmpeg pour découper et positionner les segments voix off.
 
     Utilise atrim pour découper un seul fichier audio (input vo_input_idx)
     et adelay pour positionner chaque segment dans la timeline vidéo.
-    Produit une piste [voice].
+    Produit une piste [voice] stabilisée via dynaudnorm.
     """
     parts = []
     labels = []
@@ -138,18 +139,21 @@ def _build_segments_filter(
         delay_part = f",adelay={delay_ms}|{delay_ms}" if delay_ms > 0 else ""
         parts.append(
             f"[{vo_input_idx}:a]atrim=start={seg.in_seconds}:end={seg.out_seconds},"
-            f"asetpts=PTS-STARTPTS{delay_part}[{label}]"
+            f"asetpts=PTS-STARTPTS,volume={ac.voiceover_volume}{delay_part}[{label}]"
         )
         labels.append(f"[{label}]")
 
     if len(segments) == 1:
-        # Un seul segment, renommer directement
+        # Un seul segment, pas besoin de amix ni dynaudnorm
         return parts[0].replace(f"[{labels[0][1:-1]}]", "[voice]")
 
     mix_inputs = "".join(labels)
     parts.append(
-        f"{mix_inputs}amix=inputs={len(segments)}:duration=longest:dropout_transition=0[voice]"
+        f"{mix_inputs}amix=inputs={len(segments)}:duration=longest"
+        f":dropout_transition=0:normalize=0[voice_raw]"
     )
+    # Stabiliser le volume après le mix des segments
+    parts.append("[voice_raw]dynaudnorm=f=150:g=15[voice]")
     return ";".join(parts)
 
 
@@ -191,18 +195,19 @@ async def _mix_audio(
         fade_out = f"afade=t=out:st={fade_out_start}:d={ac.music_fade_out_seconds}," if ac.music_fade_out_seconds > 0 else ""
 
         # input 0=video, 1=voiceover, 2=music
-        seg_filter = _build_segments_filter(segments, 1)
+        seg_filter = _build_segments_filter(segments, 1, ac)
 
         filter_complex = (
             f"{seg_filter};"
-            f"[voice]asplit=2[vo_sc][vo_mix];"
+            f"[voice]asplit[voice_out][voice_sc];"
+            f"[voice_sc]volume=3[voice_sc_boosted];"
             f"[2:a]aloop=loop=-1:size=2e+09,atrim=0:{total_duration},"
             f"asetpts=PTS-STARTPTS,{fade_in}{fade_out}"
             f"volume={ac.music_volume},aresample={ac.resample_rate}[music];"
-            f"[music][vo_sc]sidechaincompress="
+            f"[music][voice_sc_boosted]sidechaincompress="
             f"threshold={ac.sidechain_threshold}:ratio={ac.sidechain_ratio}:"
             f"attack={ac.sidechain_attack}:release={ac.sidechain_release}[musicduck];"
-            f"[vo_mix][musicduck]amix=inputs=2:duration=longest:dropout_transition=2[aout]"
+            f"[voice_out][musicduck]amix=inputs=2:duration=longest:dropout_transition=2[aout]"
         )
 
         run_ffmpeg(
@@ -222,7 +227,7 @@ async def _mix_audio(
         emit(job_id, "ffmpeg", "info",
              f"Mixage {len(segments)} segments voix off (sans musique)...")
 
-        seg_filter = _build_segments_filter(segments, 1)
+        seg_filter = _build_segments_filter(segments, 1, ac)
         filter_complex = seg_filter.replace("[voice]", "[aout]")
 
         run_ffmpeg(
