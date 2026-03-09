@@ -152,8 +152,8 @@ def _build_segments_filter(
         f"{mix_inputs}amix=inputs={len(segments)}:duration=longest"
         f":dropout_transition=0:normalize=0[voice_raw]"
     )
-    # Stabiliser le volume après le mix des segments
-    parts.append("[voice_raw]dynaudnorm=f=150:g=15[voice]")
+    # Normaliser + stabiliser le volume après le mix des segments
+    parts.append("[voice_raw]loudnorm=I=-16:TP=-1.5:LRA=11,dynaudnorm=f=150:g=15[voice]")
     return ";".join(parts)
 
 
@@ -256,6 +256,7 @@ async def _mix_audio(
 
         filter_complex = (
             f"[1:a]volume={ac.voiceover_volume},apad=whole_dur={total_duration},"
+            f"loudnorm=I=-16:TP=-1.5:LRA=11,"
             f"aresample={ac.resample_rate},asplit=2[vo_sc][vo_mix];"
             f"[2:a]aloop=loop=-1:size=2e+09,atrim=0:{total_duration},"
             f"loudnorm=I={ac.music_loudnorm_target}:TP=-1.5:LRA=11,"
