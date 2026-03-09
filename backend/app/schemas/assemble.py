@@ -22,6 +22,7 @@ class AudioConfig(BaseModel):
     sidechain_ratio: float = 6
     sidechain_attack: float = 200
     sidechain_release: float = 1000
+    music_loudnorm_target: float = -16
     resample_rate: int = 44100
     output_codec: str = "aac"
     output_bitrate: str = "192k"

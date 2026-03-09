@@ -71,8 +71,8 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
 
         vf = (
             f"setpts={pts_factor}*PTS,"
-            f"scale={vc.width}:{vc.height}:force_original_aspect_ratio=decrease,"
-            f"pad={vc.width}:{vc.height}:(ow-iw)/2:(oh-ih)/2"
+            f"scale=w={vc.width}:h={vc.height}:force_original_aspect_ratio=increase,"
+            f"crop={vc.width}:{vc.height}"
         )
 
         run_ffmpeg(
@@ -202,7 +202,9 @@ async def _mix_audio(
             f"[voice]asplit[voice_out][voice_sc];"
             f"[voice_sc]volume=3[voice_sc_boosted];"
             f"[2:a]aloop=loop=-1:size=2e+09,atrim=0:{total_duration},"
-            f"asetpts=PTS-STARTPTS,{fade_in}{fade_out}"
+            f"asetpts=PTS-STARTPTS,"
+            f"loudnorm=I={ac.music_loudnorm_target}:TP=-1.5:LRA=11,"
+            f"{fade_in}{fade_out}"
             f"volume={ac.music_volume},aresample={ac.resample_rate}[music];"
             f"[music][voice_sc_boosted]sidechaincompress="
             f"threshold={ac.sidechain_threshold}:ratio={ac.sidechain_ratio}:"
@@ -256,6 +258,7 @@ async def _mix_audio(
             f"[1:a]volume={ac.voiceover_volume},apad=whole_dur={total_duration},"
             f"aresample={ac.resample_rate},asplit=2[vo_sc][vo_mix];"
             f"[2:a]aloop=loop=-1:size=2e+09,atrim=0:{total_duration},"
+            f"loudnorm=I={ac.music_loudnorm_target}:TP=-1.5:LRA=11,"
             f"{fade_in}{fade_out}"
             f"volume={ac.music_volume},aresample={ac.resample_rate}[music_base];"
             f"[music_base][vo_sc]sidechaincompress="
@@ -299,6 +302,7 @@ async def _mix_audio(
 
         filter_complex = (
             f"[1:a]aloop=loop=-1:size=2e+09,atrim=0:{total_duration},"
+            f"loudnorm=I={ac.music_loudnorm_target}:TP=-1.5:LRA=11,"
             f"{fade_in}{fade_out}"
             f"volume={ac.music_volume},aresample={ac.resample_rate}[music]"
         )
