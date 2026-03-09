@@ -15,13 +15,13 @@ class VoiceoverSegment(BaseModel):
 
 class AudioConfig(BaseModel):
     voiceover_volume: float = 1.0
-    music_volume: float = 0.3
+    music_volume: float = 0.5
     music_fade_in_seconds: float = 3
     music_fade_out_seconds: float = 5
     sidechain_threshold: float = 0.02
     sidechain_ratio: float = 6
     sidechain_attack: float = 200
-    sidechain_release: float = 1000
+    sidechain_release: float = 400
     music_loudnorm_target: float = -16
     resample_rate: int = 44100
     output_codec: str = "aac"
