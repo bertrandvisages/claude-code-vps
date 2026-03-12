@@ -87,7 +87,12 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
             desc=f"adjust clip {i + 1}",
         )
         adjusted_paths.append(adjusted)
-        emit(job_id, "ffmpeg", "info", f"Clip {i + 1}/{len(clips)} : {actual_duration:.1f}s → {target_duration:.1f}s")
+        adj_real_duration = get_duration(adjusted)
+        emit(job_id, "ffmpeg", "info",
+             f"Clip {i + 1}/{len(clips)} : source={actual_duration:.3f}s → "
+             f"target={target_duration:.3f}s (pts={pts_factor:.4f}) → "
+             f"real_adjusted={adj_real_duration:.3f}s "
+             f"(delta={adj_real_duration - target_duration:+.3f}s)")
 
     # --- 3. Concaténer les clips (cut franc) ---
     emit(job_id, "ffmpeg", "info", "Concaténation des clips...")
@@ -100,6 +105,12 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         desc="concat",
     )
     total_duration = get_duration(concat_video)
+    sum_target = sum(c.duree_secondes for c in clips)
+    sum_adjusted = sum(get_duration(p) for p in adjusted_paths)
+    emit(job_id, "ffmpeg", "info",
+         f"DEBUG durations: concat_ffprobe={total_duration:.3f}s | "
+         f"sum_target={sum_target:.3f}s | sum_adjusted_ffprobe={sum_adjusted:.3f}s | "
+         f"drift_vs_target={total_duration - sum_target:+.3f}s")
     emit(job_id, "ffmpeg", "success", f"Vidéo concaténée : {total_duration:.1f}s")
 
     # --- 4. Audio (voiceover + musique avec ducking) ---
