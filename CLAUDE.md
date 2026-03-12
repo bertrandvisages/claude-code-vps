@@ -85,7 +85,7 @@ Base URL : `/api/v1` — Auth : header `X-Api-Key`
   ],
   "audio_config": {
     "voiceover_volume": 1.0,
-    "music_volume": 0.15
+    "music_volume": 1.0
   }
 }
 ```
@@ -106,7 +106,7 @@ Base URL : `/api/v1` — Auth : header `X-Api-Key`
   ],
   "audio_config": {
     "voiceover_volume": 1.0,
-    "music_volume": 0.4
+    "music_volume": 1.0
   }
 }
 ```
@@ -120,13 +120,17 @@ Base URL : `/api/v1` — Auth : header `X-Api-Key`
 ```json
 "audio_config": {
   "voiceover_volume": 1.0,
-  "music_volume": 0.15,
+  "music_volume": 1.0,
   "music_fade_in_seconds": 3,
   "music_fade_out_seconds": 5,
   "sidechain_threshold": 0.02,
-  "sidechain_ratio": 6,
+  "sidechain_ratio": 3,
   "sidechain_attack": 200,
-  "sidechain_release": 1000
+  "sidechain_release": 150,
+  "music_loudnorm_target": -16,
+  "resample_rate": 44100,
+  "output_codec": "aac",
+  "output_bitrate": "192k"
 }
 ```
 
