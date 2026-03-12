@@ -224,7 +224,7 @@ async def _mix_audio(
 
         filter_complex = (
             f"{seg_filter};"
-            f"[voice]asplit[voice_out][voice_sc];"
+            f"[voice]apad=whole_dur={total_duration},asplit[voice_out][voice_sc];"
             f"[voice_sc]volume=3[voice_sc_boosted];"
             f"[2:a]aloop=loop=-1:size=2e+09,atrim=0:{total_duration},"
             f"asetpts=PTS-STARTPTS,"
@@ -234,7 +234,7 @@ async def _mix_audio(
             f"[music][voice_sc_boosted]sidechaincompress="
             f"threshold={ac.sidechain_threshold}:ratio={ac.sidechain_ratio}:"
             f"attack={ac.sidechain_attack}:release={ac.sidechain_release}[musicduck];"
-            f"[voice_out][musicduck]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0[aout]"
+            f"[voice_out][musicduck]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[aout]"
         )
 
         run_ffmpeg(
