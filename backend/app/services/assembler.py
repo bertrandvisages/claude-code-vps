@@ -196,6 +196,19 @@ async def _mix_audio(
 
     segments = request.voiceover_segments
 
+    # --- Debug: durées voiceover et segments ---
+    if vo_path:
+        vo_duration = get_duration(vo_path)
+        emit(job_id, "ffmpeg", "info", f"DEBUG voiceover.mp3 duration: {vo_duration:.3f}s")
+    if segments:
+        last_seg = segments[-1]
+        last_seg_audio_dur = last_seg.out_seconds - last_seg.in_seconds
+        last_seg_end = last_seg.start_seconds + last_seg_audio_dur
+        emit(job_id, "ffmpeg", "info",
+             f"DEBUG last segment: in={last_seg.in_seconds}s out={last_seg.out_seconds}s "
+             f"start={last_seg.start_seconds}s → ends at {last_seg_end:.1f}s in timeline "
+             f"(video={total_duration:.1f}s, gap={total_duration - last_seg_end:.1f}s)")
+
     # --- Segments (atrim) + musique (ducking) ---
     if vo_path and segments and music_path:
         emit(job_id, "ffmpeg", "info",

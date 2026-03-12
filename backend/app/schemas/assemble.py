@@ -15,7 +15,7 @@ class VoiceoverSegment(BaseModel):
 
 class AudioConfig(BaseModel):
     voiceover_volume: float = 1.0
-    music_volume: float = 0.8
+    music_volume: float = 1.0
     music_fade_in_seconds: float = 3
     music_fade_out_seconds: float = 5
     sidechain_threshold: float = 0.02
