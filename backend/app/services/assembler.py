@@ -10,6 +10,7 @@ from app.schemas.assemble import AssembleRequest, AudioConfig, VideoConfig
 from app.services.job_logger import emit
 
 logger = logging.getLogger("uvicorn.error")
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 
 async def download_file(url: str, dest: Path) -> Path:
