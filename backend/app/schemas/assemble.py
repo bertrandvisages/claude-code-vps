@@ -19,7 +19,7 @@ class AudioConfig(BaseModel):
     music_fade_in_seconds: float = 3
     music_fade_out_seconds: float = 5
     sidechain_threshold: float = 0.02
-    sidechain_ratio: float = 4
+    sidechain_ratio: float = 3
     sidechain_attack: float = 200
     sidechain_release: float = 150
     music_loudnorm_target: float = -16
