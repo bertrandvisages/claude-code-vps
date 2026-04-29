@@ -47,6 +47,9 @@ class AssembleRequest(BaseModel):
     voiceover_segments: list[VoiceoverSegment] | None = None
     music_url: str | None = None
     clips: list[Clip]
+    # Packshot mp4 a concatener en silence apres le mix audio (musique fade out
+    # se termine sur les derniers clips, packshot 100% muet).
+    packshot_url: str | None = None
     audio_config: AudioConfig = AudioConfig()
     video_config: VideoConfig = VideoConfig()
     webhook_url: str | None = None

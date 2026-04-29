@@ -132,15 +132,51 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
     output_filename = f"{request.entity_type}_{request.entity_id}.mp4"
     output_path = work_dir / output_filename
 
+    # Si packshot present, on ecrit d'abord la video mixee dans un fichier tmp,
+    # puis on concatene avec le packshot (silencieux) en derniere etape.
+    mixed_path = (work_dir / f"mixed_{output_filename}") if request.packshot_url else output_path
+
     if request.voiceover_url or request.voiceover_segments or request.music_url:
-        await _mix_audio(job_id, work_dir, concat_video, request, total_duration, output_path)
+        await _mix_audio(job_id, work_dir, concat_video, request, total_duration, mixed_path)
     else:
         emit(job_id, "ffmpeg", "info", "Pas d'audio externe, conservation audio clips")
         run_ffmpeg(
             ["-i", str(concat_video), "-c", "copy",
-             "-movflags", vc.movflags, str(output_path)],
+             "-movflags", vc.movflags, str(mixed_path)],
             desc="copy final",
         )
+
+    # --- 5. Packshot silencieux concat a la fin ---
+    if request.packshot_url:
+        emit(job_id, "pipeline", "info", "Telechargement packshot...")
+        packshot_raw = work_dir / "packshot_raw.mp4"
+        await download_file(request.packshot_url, packshot_raw)
+
+        # Re-encode packshot pour matcher fps/codec/dimensions + audio silence stereo
+        packshot_norm = work_dir / "packshot_norm.mp4"
+        run_ffmpeg(
+            ["-i", str(packshot_raw),
+             "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate={ac.resample_rate}",
+             "-vf", f"scale=w={vc.width}:h={vc.height}:force_original_aspect_ratio=increase,crop={vc.width}:{vc.height}",
+             "-r", str(vc.fps),
+             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf),
+             "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
+             "-shortest",
+             str(packshot_norm)],
+            desc="normalize packshot (silent)",
+        )
+
+        emit(job_id, "ffmpeg", "info", "Concatenation video + packshot silencieux...")
+        final_concat_list = work_dir / "final_concat.txt"
+        final_concat_list.write_text(
+            f"file '{mixed_path.name}'\nfile '{packshot_norm.name}'\n"
+        )
+        run_ffmpeg(
+            ["-f", "concat", "-safe", "0", "-i", str(final_concat_list),
+             "-c", "copy", "-movflags", vc.movflags, str(output_path)],
+            desc="concat with packshot",
+        )
+        emit(job_id, "pipeline", "success", f"Packshot ajoute : {get_duration(packshot_norm):.1f}s")
 
     emit(job_id, "pipeline", "success", f"Vidéo finale : {output_filename}")
     return output_path
