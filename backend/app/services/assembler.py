@@ -49,14 +49,28 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
     vc = request.video_config
     ac = request.audio_config
 
-    # --- 1. Télécharger les clips ---
+    # --- 1. Télécharger les clips (+ cut rush si start_seconds) ---
     emit(job_id, "pipeline", "info", f"Téléchargement de {len(clips)} clips...")
     clip_paths: list[Path] = []
     for i, clip in enumerate(clips):
-        dest = work_dir / f"clip_{i:03d}.mp4"
-        await download_file(clip.video_url, dest)
-        clip_paths.append(dest)
-        emit(job_id, "pipeline", "info", f"Clip {i + 1}/{len(clips)} téléchargé")
+        raw = work_dir / f"clip_{i:03d}_raw.mp4"
+        await download_file(clip.video_url, raw)
+
+        if clip.start_seconds is not None:
+            # Rush : extrait [start, start+duree] avant le speed adjust
+            cut = work_dir / f"clip_{i:03d}.mp4"
+            run_ffmpeg(
+                ["-ss", str(clip.start_seconds), "-t", str(clip.duree_secondes),
+                 "-i", str(raw), "-c", "copy", str(cut)],
+                desc=f"cut rush {i + 1}",
+            )
+            clip_paths.append(cut)
+            emit(job_id, "pipeline", "info",
+                 f"Clip {i + 1}/{len(clips)} téléchargé + cut "
+                 f"({clip.start_seconds}s → {clip.start_seconds + clip.duree_secondes}s)")
+        else:
+            clip_paths.append(raw)
+            emit(job_id, "pipeline", "info", f"Clip {i + 1}/{len(clips)} téléchargé")
 
     # --- 2. Speed adjust + resize chaque clip ---
     emit(job_id, "ffmpeg", "info", "Ajustement vitesse et résolution des clips...")
@@ -115,7 +129,7 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
     emit(job_id, "ffmpeg", "success", f"Vidéo concaténée : {total_duration:.1f}s")
 
     # --- 4. Audio (voiceover + musique avec ducking) ---
-    output_filename = f"hotel_{request.hotel_id}.mp4"
+    output_filename = f"{request.entity_type}_{request.entity_id}.mp4"
     output_path = work_dir / output_filename
 
     if request.voiceover_url or request.voiceover_segments or request.music_url:

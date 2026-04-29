@@ -5,6 +5,8 @@ class Clip(BaseModel):
     index: int
     video_url: str
     duree_secondes: float
+    # Pour les rushes : offset ffmpeg `-ss`. None = pas de cut, le clip est utilise tel quel.
+    start_seconds: float | None = None
 
 
 class VoiceoverSegment(BaseModel):
@@ -39,7 +41,8 @@ class VideoConfig(BaseModel):
 
 
 class AssembleRequest(BaseModel):
-    hotel_id: str
+    hotel_id: str | None = None
+    idea_id: str | None = None
     voiceover_url: str | None = None
     voiceover_segments: list[VoiceoverSegment] | None = None
     music_url: str | None = None
@@ -48,8 +51,19 @@ class AssembleRequest(BaseModel):
     video_config: VideoConfig = VideoConfig()
     webhook_url: str | None = None
 
+    @property
+    def entity_type(self) -> str:
+        return "idea" if self.idea_id else "hotel"
+
+    @property
+    def entity_id(self) -> str:
+        # validator garantit qu'au moins un des deux est present
+        return self.idea_id or self.hotel_id  # type: ignore[return-value]
+
     @model_validator(mode="after")
     def resolve_voiceover(self) -> "AssembleRequest":
+        if not self.hotel_id and not self.idea_id:
+            raise ValueError("hotel_id ou idea_id requis")
         if self.voiceover_segments is not None and len(self.voiceover_segments) == 0:
             self.voiceover_segments = None
         if self.voiceover_segments and not self.voiceover_url:

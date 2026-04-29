@@ -31,7 +31,7 @@ async def assemble(
     db.add(job)
     await db.commit()
 
-    logger.info(f"Job {job_id} created — hotel_id={data.hotel_id}, {len(data.clips)} clips, launching pipeline")
+    logger.info(f"Job {job_id} created — {data.entity_type}_id={data.entity_id}, {len(data.clips)} clips, launching pipeline")
     background_tasks.add_task(run_assembly, job_id, data)
 
     return AssembleResponse(job_id=job_id, status="processing")
