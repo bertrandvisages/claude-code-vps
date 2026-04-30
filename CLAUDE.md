@@ -164,3 +164,16 @@ réduit automatiquement le volume de la musique quand la voix est active.
   - `git push`, `git push --force`
   - `git reset --hard`
   - Toute commande SQL `DROP` ou `TRUNCATE`
+
+## Skills Claude Code installés (local, gitignore)
+
+- **`ffmpeg`** (rendi-api/ffmpeg-cheatsheet) : cheatsheet ffmpeg/ffprobe (trim, resize, codec, CRF, overlay, etc.). Critique pour ce projet qui assemble des clips vidéo. Évite les pièges courants comme `-c copy` mal placé sur trim avec `-ss` (cause de freeze image).
+
+Re-installer après clone du repo :
+```bash
+mkdir -p .claude/skills && cd .claude/skills && \
+  git clone --depth=1 https://github.com/rendi-api/ffmpeg-cheatsheet.git && \
+  ln -sf ffmpeg-cheatsheet/skills/ffmpeg ./ffmpeg
+```
+
+Les skills sont scannés au démarrage de la session Claude Code → après install, **nouvelle conversation** Claude Code ou **Reload Window** VS Code pour les charger.

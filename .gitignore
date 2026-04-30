@@ -26,3 +26,6 @@ Thumbs.db
 # Runtime data
 backend/data/
 backend/tmp/
+
+# Local Claude Code skills (cloned externally)
+/.claude/skills/
