@@ -1,12 +1,23 @@
 from pydantic import BaseModel, Field, model_validator
 
 
+class ColorCorrection(BaseModel):
+    # Filtre ffmpeg eq= applique au cut rush (propage depuis app-vod via
+    # rushes.analysis.color_correction renvoye par Gemini). None par defaut.
+    brightness: float | None = None
+    contrast: float | None = None
+    saturation: float | None = None
+    gamma: float | None = None
+
+
 class Clip(BaseModel):
     index: int
     video_url: str
     duree_secondes: float
     # Pour les rushes : offset ffmpeg `-ss`. None = pas de cut, le clip est utilise tel quel.
     start_seconds: float | None = None
+    # Pour les rushes : etalonnage colorimetrique optionnel applique au cut.
+    color_correction: ColorCorrection | None = None
 
 
 class VoiceoverSegment(BaseModel):

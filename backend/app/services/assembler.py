@@ -79,11 +79,26 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         atempo = 1.0 / pts_factor
         atempo_filters = _build_atempo_chain(atempo)
 
-        vf = (
-            f"setpts={pts_factor}*PTS,"
-            f"scale=w={vc.width}:h={vc.height}:force_original_aspect_ratio=increase,"
-            f"crop={vc.width}:{vc.height}"
-        )
+        # Filter chain : setpts → (eq= color correction si presente, rushes seulement)
+        # → scale → crop. eq= est applique apres setpts pour garder l'ordre logique
+        # tempo→couleur→geometrie.
+        vf_parts = [f"setpts={pts_factor}*PTS"]
+        if clip.color_correction:
+            cc = clip.color_correction
+            eq_args: list[str] = []
+            if cc.brightness is not None:
+                eq_args.append(f"brightness={cc.brightness}")
+            if cc.contrast is not None:
+                eq_args.append(f"contrast={cc.contrast}")
+            if cc.saturation is not None:
+                eq_args.append(f"saturation={cc.saturation}")
+            if cc.gamma is not None:
+                eq_args.append(f"gamma={cc.gamma}")
+            if eq_args:
+                vf_parts.append(f"eq={':'.join(eq_args)}")
+        vf_parts.append(f"scale=w={vc.width}:h={vc.height}:force_original_aspect_ratio=increase")
+        vf_parts.append(f"crop={vc.width}:{vc.height}")
+        vf = ",".join(vf_parts)
 
         args: list[str] = []
         # Input seek rapide AVANT -i (pour les rushes) : pose le decodeur avant
