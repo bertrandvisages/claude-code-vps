@@ -49,36 +49,31 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
     vc = request.video_config
     ac = request.audio_config
 
-    # --- 1. Télécharger les clips (+ cut rush si start_seconds) ---
+    # --- 1. Télécharger les clips ---
     emit(job_id, "pipeline", "info", f"Téléchargement de {len(clips)} clips...")
     clip_paths: list[Path] = []
     for i, clip in enumerate(clips):
         raw = work_dir / f"clip_{i:03d}_raw.mp4"
         await download_file(clip.video_url, raw)
+        clip_paths.append(raw)
+        emit(job_id, "pipeline", "info", f"Clip {i + 1}/{len(clips)} téléchargé")
 
-        if clip.start_seconds is not None:
-            # Rush : extrait [start, start+duree] avant le speed adjust
-            cut = work_dir / f"clip_{i:03d}.mp4"
-            run_ffmpeg(
-                ["-ss", str(clip.start_seconds), "-t", str(clip.duree_secondes),
-                 "-i", str(raw), "-c", "copy", str(cut)],
-                desc=f"cut rush {i + 1}",
-            )
-            clip_paths.append(cut)
-            emit(job_id, "pipeline", "info",
-                 f"Clip {i + 1}/{len(clips)} téléchargé + cut "
-                 f"({clip.start_seconds}s → {clip.start_seconds + clip.duree_secondes}s)")
-        else:
-            clip_paths.append(raw)
-            emit(job_id, "pipeline", "info", f"Clip {i + 1}/{len(clips)} téléchargé")
-
-    # --- 2. Speed adjust + resize chaque clip ---
-    emit(job_id, "ffmpeg", "info", "Ajustement vitesse et résolution des clips...")
+    # --- 2. Cut rush (si applicable) + speed adjust + resize en UN SEUL re-encode
+    # par clip. Pour les rushes, le -ss/-t est applique sur l input du re-encode,
+    # ce qui est frame-accurate (pas de freeze image cause par cut -c copy avant
+    # une keyframe). Pour les photos animees, -ss/-t omis : tout le clip est traite.
+    emit(job_id, "ffmpeg", "info", "Cut + ajustement vitesse + résolution des clips...")
     adjusted_paths: list[Path] = []
     for i, (clip_path, clip) in enumerate(zip(clip_paths, clips)):
         adjusted = work_dir / f"adj_{i:03d}.mp4"
-        actual_duration = get_duration(clip_path)
         target_duration = clip.duree_secondes
+
+        # Pour rush : actual_duration = target (on cut exactement target sec).
+        # Pour photo : actual_duration = duree reelle du clip telecharge.
+        if clip.start_seconds is not None:
+            actual_duration = float(target_duration)
+        else:
+            actual_duration = get_duration(clip_path)
 
         pts_factor = target_duration / actual_duration
         atempo = 1.0 / pts_factor
@@ -90,21 +85,33 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
             f"crop={vc.width}:{vc.height}"
         )
 
-        run_ffmpeg(
-            ["-i", str(clip_path),
-             "-vf", vf,
-             "-af", atempo_filters,
-             "-r", str(vc.fps),
-             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf),
-             "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
-             "-ar", str(ac.resample_rate),
-             str(adjusted)],
-            desc=f"adjust clip {i + 1}",
-        )
+        args: list[str] = []
+        # Input seek rapide AVANT -i (pour les rushes) : pose le decodeur avant
+        # la keyframe puis decode jusqu a start_seconds. Combine avec -t pour la
+        # duree, et un re-encode propre : pas de freeze car les frames sont
+        # ré-écrites avec timestamps continus à partir de 0.
+        if clip.start_seconds is not None:
+            args.extend(["-ss", str(clip.start_seconds)])
+        args.extend(["-i", str(clip_path)])
+        if clip.start_seconds is not None:
+            args.extend(["-t", str(clip.duree_secondes)])
+        args.extend([
+            "-vf", vf,
+            "-af", atempo_filters,
+            "-r", str(vc.fps),
+            "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf),
+            "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
+            "-ar", str(ac.resample_rate),
+            "-avoid_negative_ts", "make_zero",
+            str(adjusted),
+        ])
+
+        run_ffmpeg(args, desc=f"adjust clip {i + 1}")
         adjusted_paths.append(adjusted)
         adj_real_duration = get_duration(adjusted)
+        rush_info = f" (rush cut {clip.start_seconds}s→{clip.start_seconds + target_duration}s)" if clip.start_seconds is not None else ""
         emit(job_id, "ffmpeg", "info",
-             f"Clip {i + 1}/{len(clips)} : source={actual_duration:.3f}s → "
+             f"Clip {i + 1}/{len(clips)}{rush_info} : source={actual_duration:.3f}s → "
              f"target={target_duration:.3f}s (pts={pts_factor:.4f}) → "
              f"real_adjusted={adj_real_duration:.3f}s "
              f"(delta={adj_real_duration - target_duration:+.3f}s)")
