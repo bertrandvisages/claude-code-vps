@@ -28,8 +28,8 @@ class GradePreviewRequest(BaseModel):
     video_url: str
     color_correction: ColorCorrection
     duration: float = Field(default=10.0, ge=1.0, le=60.0)
-    width: int = 1280
-    height: int = 720
+    width: int = 1920
+    height: int = 1080
     fps: int = 30
 
 
