@@ -27,14 +27,17 @@ async def assemble(
     """Reçoit un JSON de montage et lance l'assemblage en tâche de fond."""
     job_id = str(uuid.uuid4())
 
-    job = Job(id=job_id, status="processing")
+    # "queued" par defaut : run_assembly passe en "processing" une fois le
+    # semaphore acquis (1 rendu a la fois). Le poll cote app-vod ne decompte
+    # son budget de rendu qu'une fois le job en "processing".
+    job = Job(id=job_id, status="queued")
     db.add(job)
     await db.commit()
 
     logger.info(f"Job {job_id} created — {data.entity_type}_id={data.entity_id}, {len(data.clips)} clips, launching pipeline")
     background_tasks.add_task(run_assembly, job_id, data)
 
-    return AssembleResponse(job_id=job_id, status="processing")
+    return AssembleResponse(job_id=job_id, status="queued")
 
 
 @router.get("/jobs/{job_id}/status", response_model=JobStatusResponse)
