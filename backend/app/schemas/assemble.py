@@ -48,6 +48,11 @@ class VideoConfig(BaseModel):
     codec: str = "libx264"
     preset: str = "fast"
     crf: int = 23
+    # yuv420p : seul pixel format universellement lisible (navigateurs,
+    # QuickTime, Okast). Sans ca, libx264 garde le format de la source
+    # (yuv444p/yuvj420p possible sur packshot ou certains clips) -> "fichier
+    # corrompu" a la lecture + raccord concat -c copy casse au packshot.
+    pix_fmt: str = "yuv420p"
     movflags: str = "+faststart"
 
 

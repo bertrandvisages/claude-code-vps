@@ -98,6 +98,9 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
                 vf_parts.append(f"eq={':'.join(eq_args)}")
         vf_parts.append(f"scale=w={vc.width}:h={vc.height}:force_original_aspect_ratio=increase")
         vf_parts.append(f"crop={vc.width}:{vc.height}")
+        # setsar=1 : SAR uniforme sur tous les clips -> le concat -c copy (clips
+        # puis packshot) ne casse pas sur un mismatch d'aspect ratio.
+        vf_parts.append("setsar=1")
         vf = ",".join(vf_parts)
 
         args: list[str] = []
@@ -114,7 +117,7 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
             "-vf", vf,
             "-af", atempo_filters,
             "-r", str(vc.fps),
-            "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf),
+            "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf), "-pix_fmt", vc.pix_fmt,
             "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
             "-ar", str(ac.resample_rate),
             "-avoid_negative_ts", "make_zero",
@@ -179,9 +182,9 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         run_ffmpeg(
             ["-i", str(packshot_raw),
              "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate={ac.resample_rate}",
-             "-vf", f"scale=w={vc.width}:h={vc.height}:force_original_aspect_ratio=increase,crop={vc.width}:{vc.height}",
+             "-vf", f"scale=w={vc.width}:h={vc.height}:force_original_aspect_ratio=increase,crop={vc.width}:{vc.height},setsar=1",
              "-r", str(vc.fps),
-             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf),
+             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf), "-pix_fmt", vc.pix_fmt,
              "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
              "-shortest",
              str(packshot_norm)],
@@ -313,7 +316,7 @@ async def _mix_audio(
             ["-i", str(video_path), "-i", str(vo_path), "-i", str(music_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[aout]",
-             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf),
+             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf), "-pix_fmt", vc.pix_fmt,
              "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
              "-movflags", vc.movflags,
              "-shortest",
@@ -333,7 +336,7 @@ async def _mix_audio(
             ["-i", str(video_path), "-i", str(vo_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[aout]",
-             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf),
+             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf), "-pix_fmt", vc.pix_fmt,
              "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
              "-movflags", vc.movflags,
              "-shortest",
@@ -369,7 +372,7 @@ async def _mix_audio(
             ["-i", str(video_path), "-i", str(vo_path), "-i", str(music_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[aout]",
-             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf),
+             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf), "-pix_fmt", vc.pix_fmt,
              "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
              "-movflags", vc.movflags,
              "-shortest",
