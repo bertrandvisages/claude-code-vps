@@ -196,10 +196,26 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         final_concat_list.write_text(
             f"file '{mixed_path.name}'\nfile '{packshot_norm.name}'\n"
         )
+        concat_pk = work_dir / "concat_pk.mp4"
         run_ffmpeg(
             ["-f", "concat", "-safe", "0", "-i", str(final_concat_list),
-             "-c", "copy", "-movflags", vc.movflags, str(output_path)],
+             "-c", "copy", "-movflags", vc.movflags, str(concat_pk)],
             desc="concat with packshot",
+        )
+
+        # Le concat -c copy ne reporte pas toujours la piste audio (silencieuse)
+        # du packshot quand ses parametres different du mix principal -> la piste
+        # audio finit AVANT la video (les ~Ns du packshot sans audio). Chrome
+        # tolere, mais FIREFOX rejette la fin ("fichier corrompu"). On pad donc
+        # l'audio avec du silence jusqu'a la duree video (video copiee, rapide)
+        # pour garantir audio==video et la compatibilite tous navigateurs.
+        run_ffmpeg(
+            ["-i", str(concat_pk),
+             "-c:v", "copy",
+             "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
+             "-af", "apad", "-shortest",
+             "-movflags", vc.movflags, str(output_path)],
+            desc="pad audio to video length (firefox compat)",
         )
         emit(job_id, "pipeline", "success", f"Packshot ajoute : {get_duration(packshot_norm):.1f}s")
 
