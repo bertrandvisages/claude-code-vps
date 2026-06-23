@@ -1,5 +1,6 @@
 """Assemblage vidéo via FFmpeg : download, speed adjust, concat, audio ducking."""
 
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -33,14 +34,73 @@ def run_ffmpeg(args: list[str], desc: str = "") -> None:
         raise RuntimeError(f"FFmpeg error ({desc}): {result.stderr.strip()}")
 
 
-def get_duration(file_path: Path) -> float:
-    """Retourne la durée d'un fichier média en secondes."""
+def _ffprobe_duration(args: list[str], file_path: Path, timeout: int = 30) -> float | None:
+    """Lance ffprobe avec `args` et renvoie la valeur en float, ou None si
+    ffprobe renvoie vide / 'N/A' / non parsable."""
     result = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+        ["ffprobe", "-v", "quiet", *args,
          "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=timeout,
     )
-    return float(result.stdout.strip())
+    val = result.stdout.strip()
+    if not val or val == "N/A":
+        return None
+    try:
+        return float(val)
+    except ValueError:
+        return None
+
+
+def get_duration(file_path: Path) -> float:
+    """Retourne la durée d'un fichier média en secondes.
+
+    Robuste aux conteneurs sans métadonnée de durée (ex: certains mp4
+    Kling / fragmentés où ffprobe renvoie 'N/A' pour format=duration, ce
+    qui faisait planter tout l'assemblage avec 'could not convert string
+    to float: N/A'). Fallback en cascade :
+      1) format=duration (rapide)
+      2) durée du flux vidéo (stream=duration)
+      3) décodage complet : nb de frames réelles / fps (fiable, plus lent)
+    """
+    # 1) durée du conteneur
+    d = _ffprobe_duration(["-show_entries", "format=duration"], file_path)
+    if d is not None and d > 0:
+        return d
+
+    # 2) durée du flux vidéo
+    d = _ffprobe_duration(
+        ["-select_streams", "v:0", "-show_entries", "stream=duration"], file_path
+    )
+    if d is not None and d > 0:
+        return d
+
+    # 3) Fallback : compte les frames réellement décodées / fps.
+    result = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-select_streams", "v:0", "-count_frames",
+         "-show_entries", "stream=nb_read_frames,avg_frame_rate",
+         "-of", "json", str(file_path)],
+        capture_output=True, text=True, timeout=120,
+    )
+    try:
+        streams = json.loads(result.stdout or "{}").get("streams", [])
+    except json.JSONDecodeError:
+        streams = []
+    if streams:
+        st = streams[0]
+        nb = st.get("nb_read_frames")
+        rate = st.get("avg_frame_rate", "0/0")
+        try:
+            num, den = rate.split("/")
+            fps = float(num) / float(den) if float(den) else 0.0
+            if nb and fps > 0:
+                return int(nb) / fps
+        except (ValueError, ZeroDivisionError):
+            pass
+
+    raise RuntimeError(
+        f"Impossible de déterminer la durée de {file_path.name} "
+        f"(ffprobe: format/stream duration = N/A, décompte de frames échoué)"
+    )
 
 
 async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) -> Path:
@@ -70,8 +130,21 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
 
         # Pour rush : actual_duration = target (on cut exactement target sec).
         # Pour photo : actual_duration = duree reelle du clip telecharge.
-        if clip.start_seconds is not None:
+        start_seconds = clip.start_seconds
+        if start_seconds is not None:
             actual_duration = float(target_duration)
+            # Clamp anti clip-vide : si start_seconds depasse la fin du rush
+            # (ex: start=60 sur un rush de 11s -> -ss au-dela de la fin ->
+            # sortie ffmpeg vide -> get_duration renvoie 'N/A' -> tout
+            # l'assemblage plantait), on recale start pour que la fenetre
+            # [start, start+duree] tienne dans la source.
+            src_dur = get_duration(clip_path)
+            max_start = max(0.0, src_dur - target_duration)
+            if start_seconds > max_start:
+                emit(job_id, "ffmpeg", "info",
+                     f"Clip {i + 1} (rush) : start_seconds={start_seconds}s hors "
+                     f"source ({src_dur:.1f}s) -> clamp à {max_start:.1f}s")
+                start_seconds = max_start
         else:
             actual_duration = get_duration(clip_path)
 
@@ -108,10 +181,10 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         # la keyframe puis decode jusqu a start_seconds. Combine avec -t pour la
         # duree, et un re-encode propre : pas de freeze car les frames sont
         # ré-écrites avec timestamps continus à partir de 0.
-        if clip.start_seconds is not None:
-            args.extend(["-ss", str(clip.start_seconds)])
+        if start_seconds is not None:
+            args.extend(["-ss", str(start_seconds)])
         args.extend(["-i", str(clip_path)])
-        if clip.start_seconds is not None:
+        if start_seconds is not None:
             args.extend(["-t", str(clip.duree_secondes)])
         args.extend([
             "-vf", vf,
@@ -127,7 +200,7 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         run_ffmpeg(args, desc=f"adjust clip {i + 1}")
         adjusted_paths.append(adjusted)
         adj_real_duration = get_duration(adjusted)
-        rush_info = f" (rush cut {clip.start_seconds}s→{clip.start_seconds + target_duration}s)" if clip.start_seconds is not None else ""
+        rush_info = f" (rush cut {start_seconds}s→{start_seconds + target_duration}s)" if start_seconds is not None else ""
         emit(job_id, "ffmpeg", "info",
              f"Clip {i + 1}/{len(clips)}{rush_info} : source={actual_duration:.3f}s → "
              f"target={target_duration:.3f}s (pts={pts_factor:.4f}) → "
