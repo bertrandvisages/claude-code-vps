@@ -1,5 +1,6 @@
 """Assemblage vidéo via FFmpeg : download, speed adjust, concat, audio ducking."""
 
+import asyncio
 import json
 import logging
 import subprocess
@@ -25,19 +26,29 @@ async def download_file(url: str, dest: Path) -> Path:
     return dest
 
 
-def run_ffmpeg(args: list[str], desc: str = "") -> None:
-    """Exécute une commande FFmpeg et lève une exception en cas d'erreur."""
+async def run_ffmpeg(args: list[str], desc: str = "") -> None:
+    """Exécute une commande FFmpeg et lève une exception en cas d'erreur.
+
+    Le subprocess bloquant tourne dans un THREAD (asyncio.to_thread) pour ne
+    PAS geler l'event loop pendant le rendu. Sinon le serveur HTTP reste figé
+    tant que ffmpeg tourne -> un 2e POST /assemble time-out au lieu d'être mis
+    en file d'attente (le semaphore ne sert alors a rien : le blocage est au
+    niveau HTTP, avant lui).
+    """
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"] + args
     logger.info(f"FFmpeg {desc}: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    result = await asyncio.to_thread(
+        subprocess.run, cmd, capture_output=True, text=True, timeout=600
+    )
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg error ({desc}): {result.stderr.strip()}")
 
 
-def _ffprobe_duration(args: list[str], file_path: Path, timeout: int = 30) -> float | None:
+async def _ffprobe_duration(args: list[str], file_path: Path, timeout: int = 30) -> float | None:
     """Lance ffprobe avec `args` et renvoie la valeur en float, ou None si
-    ffprobe renvoie vide / 'N/A' / non parsable."""
-    result = subprocess.run(
+    ffprobe renvoie vide / 'N/A' / non parsable. Off-loop (to_thread)."""
+    result = await asyncio.to_thread(
+        subprocess.run,
         ["ffprobe", "-v", "quiet", *args,
          "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)],
         capture_output=True, text=True, timeout=timeout,
@@ -51,7 +62,7 @@ def _ffprobe_duration(args: list[str], file_path: Path, timeout: int = 30) -> fl
         return None
 
 
-def get_duration(file_path: Path) -> float:
+async def get_duration(file_path: Path) -> float:
     """Retourne la durée d'un fichier média en secondes.
 
     Robuste aux conteneurs sans métadonnée de durée (ex: certains mp4
@@ -63,19 +74,20 @@ def get_duration(file_path: Path) -> float:
       3) décodage complet : nb de frames réelles / fps (fiable, plus lent)
     """
     # 1) durée du conteneur
-    d = _ffprobe_duration(["-show_entries", "format=duration"], file_path)
+    d = await _ffprobe_duration(["-show_entries", "format=duration"], file_path)
     if d is not None and d > 0:
         return d
 
     # 2) durée du flux vidéo
-    d = _ffprobe_duration(
+    d = await _ffprobe_duration(
         ["-select_streams", "v:0", "-show_entries", "stream=duration"], file_path
     )
     if d is not None and d > 0:
         return d
 
     # 3) Fallback : compte les frames réellement décodées / fps.
-    result = subprocess.run(
+    result = await asyncio.to_thread(
+        subprocess.run,
         ["ffprobe", "-v", "quiet", "-select_streams", "v:0", "-count_frames",
          "-show_entries", "stream=nb_read_frames,avg_frame_rate",
          "-of", "json", str(file_path)],
@@ -138,7 +150,7 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
             # sortie ffmpeg vide -> get_duration renvoie 'N/A' -> tout
             # l'assemblage plantait), on recale start pour que la fenetre
             # [start, start+duree] tienne dans la source.
-            src_dur = get_duration(clip_path)
+            src_dur = await get_duration(clip_path)
             max_start = max(0.0, src_dur - target_duration)
             if start_seconds > max_start:
                 emit(job_id, "ffmpeg", "info",
@@ -146,7 +158,7 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
                      f"source ({src_dur:.1f}s) -> clamp à {max_start:.1f}s")
                 start_seconds = max_start
         else:
-            actual_duration = get_duration(clip_path)
+            actual_duration = await get_duration(clip_path)
 
         pts_factor = target_duration / actual_duration
         atempo = 1.0 / pts_factor
@@ -197,9 +209,9 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
             str(adjusted),
         ])
 
-        run_ffmpeg(args, desc=f"adjust clip {i + 1}")
+        await run_ffmpeg(args, desc=f"adjust clip {i + 1}")
         adjusted_paths.append(adjusted)
-        adj_real_duration = get_duration(adjusted)
+        adj_real_duration = await get_duration(adjusted)
         rush_info = f" (rush cut {start_seconds}s→{start_seconds + target_duration}s)" if start_seconds is not None else ""
         emit(job_id, "ffmpeg", "info",
              f"Clip {i + 1}/{len(clips)}{rush_info} : source={actual_duration:.3f}s → "
@@ -212,14 +224,14 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
     concat_list = work_dir / "concat.txt"
     concat_list.write_text("\n".join(f"file '{p.name}'" for p in adjusted_paths))
     concat_video = work_dir / "concat.mp4"
-    run_ffmpeg(
+    await run_ffmpeg(
         ["-f", "concat", "-safe", "0", "-i", str(concat_list),
          "-c", "copy", str(concat_video)],
         desc="concat",
     )
-    total_duration = get_duration(concat_video)
+    total_duration = await get_duration(concat_video)
     sum_target = sum(c.duree_secondes for c in clips)
-    sum_adjusted = sum(get_duration(p) for p in adjusted_paths)
+    sum_adjusted = sum([await get_duration(p) for p in adjusted_paths])
     emit(job_id, "ffmpeg", "info",
          f"DEBUG durations: concat_ffprobe={total_duration:.3f}s | "
          f"sum_target={sum_target:.3f}s | sum_adjusted_ffprobe={sum_adjusted:.3f}s | "
@@ -238,7 +250,7 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         await _mix_audio(job_id, work_dir, concat_video, request, total_duration, mixed_path)
     else:
         emit(job_id, "ffmpeg", "info", "Pas d'audio externe, conservation audio clips")
-        run_ffmpeg(
+        await run_ffmpeg(
             ["-i", str(concat_video), "-c", "copy",
              "-movflags", vc.movflags, str(mixed_path)],
             desc="copy final",
@@ -252,7 +264,7 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
 
         # Re-encode packshot pour matcher fps/codec/dimensions + audio silence stereo
         packshot_norm = work_dir / "packshot_norm.mp4"
-        run_ffmpeg(
+        await run_ffmpeg(
             ["-i", str(packshot_raw),
              "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate={ac.resample_rate}",
              "-vf", f"scale=w={vc.width}:h={vc.height}:force_original_aspect_ratio=increase,crop={vc.width}:{vc.height},setsar=1",
@@ -270,7 +282,7 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
             f"file '{mixed_path.name}'\nfile '{packshot_norm.name}'\n"
         )
         concat_pk = work_dir / "concat_pk.mp4"
-        run_ffmpeg(
+        await run_ffmpeg(
             ["-f", "concat", "-safe", "0", "-i", str(final_concat_list),
              "-c", "copy", "-movflags", vc.movflags, str(concat_pk)],
             desc="concat with packshot",
@@ -282,7 +294,7 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         # tolere, mais FIREFOX rejette la fin ("fichier corrompu"). On pad donc
         # l'audio avec du silence jusqu'a la duree video (video copiee, rapide)
         # pour garantir audio==video et la compatibilite tous navigateurs.
-        run_ffmpeg(
+        await run_ffmpeg(
             ["-i", str(concat_pk),
              "-c:v", "copy",
              "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
@@ -290,7 +302,8 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
              "-movflags", vc.movflags, str(output_path)],
             desc="pad audio to video length (firefox compat)",
         )
-        emit(job_id, "pipeline", "success", f"Packshot ajoute : {get_duration(packshot_norm):.1f}s")
+        packshot_dur = await get_duration(packshot_norm)
+        emit(job_id, "pipeline", "success", f"Packshot ajoute : {packshot_dur:.1f}s")
 
     emit(job_id, "pipeline", "success", f"Vidéo finale : {output_filename}")
     return output_path
@@ -362,7 +375,7 @@ async def _mix_audio(
 
     # --- Debug: durées voiceover et segments ---
     if vo_path:
-        vo_duration = get_duration(vo_path)
+        vo_duration = await get_duration(vo_path)
         emit(job_id, "ffmpeg", "info", f"DEBUG voiceover.mp3 duration: {vo_duration:.3f}s")
     if segments:
         last_seg = segments[-1]
@@ -401,7 +414,7 @@ async def _mix_audio(
             f"[voice_out][musicduck]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[aout]"
         )
 
-        run_ffmpeg(
+        await run_ffmpeg(
             ["-i", str(video_path), "-i", str(vo_path), "-i", str(music_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[aout]",
@@ -421,7 +434,7 @@ async def _mix_audio(
         seg_filter = _build_segments_filter(segments, 1, ac)
         filter_complex = seg_filter.replace("[voice]", "[aout]")
 
-        run_ffmpeg(
+        await run_ffmpeg(
             ["-i", str(video_path), "-i", str(vo_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[aout]",
@@ -457,7 +470,7 @@ async def _mix_audio(
             f"level_in=1:level_sc=1[ducked];"
             f"[vo_mix][ducked]amix=inputs=2:duration=first:normalize=0[aout]"
         )
-        run_ffmpeg(
+        await run_ffmpeg(
             ["-i", str(video_path), "-i", str(vo_path), "-i", str(music_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[aout]",
@@ -472,7 +485,7 @@ async def _mix_audio(
     # --- Voiceover unique seul ---
     elif vo_path:
         emit(job_id, "ffmpeg", "info", "Ajout voix off (sans musique)...")
-        run_ffmpeg(
+        await run_ffmpeg(
             ["-i", str(video_path), "-i", str(vo_path),
              "-map", "0:v", "-map", "1:a",
              "-c:v", "copy",
@@ -496,7 +509,7 @@ async def _mix_audio(
             f"{fade_in}{fade_out}"
             f"volume={ac.music_volume},aresample={ac.resample_rate}[music]"
         )
-        run_ffmpeg(
+        await run_ffmpeg(
             ["-i", str(video_path), "-i", str(music_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[music]",

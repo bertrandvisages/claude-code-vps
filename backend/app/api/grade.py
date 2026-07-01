@@ -77,7 +77,7 @@ async def grade_preview(
         vf = ",".join(vf_parts)
 
         # -t avant -i serait input-only ; on le met cote output pour cut precis
-        run_ffmpeg(
+        await run_ffmpeg(
             [
                 "-i", str(input_path),
                 "-t", str(data.duration),
