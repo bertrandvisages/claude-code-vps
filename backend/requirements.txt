@@ -13,6 +13,9 @@ pydantic-settings==2.7.1
 # HTTP client (download clips + upload Supabase)
 httpx==0.28.1
 
+# B2 (S3-compatible) upload streaming pour les gros fichiers (append packshot)
+boto3==1.35.90
+
 # Utils
 python-dotenv==1.0.1
 aiofiles==24.1.0
