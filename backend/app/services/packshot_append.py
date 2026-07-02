@@ -65,6 +65,17 @@ async def append_packshot(video_url: str, packshot_url: str, work_dir: Path) -> 
     if sar in ("0/1", "0/0", ""):
         sar = "1/1"
 
+    # TIMESCALE video du film : le packshot DOIT utiliser le MEME timescale,
+    # sinon le concat -c copy melange deux echelles de temps et gonfle la duree
+    # video (ex: packshot 1/90000 + film 1/25000 -> duree x3.6, 45 min affichees
+    # pour 12 min reelles). On lit le time_base du film ("1/25000" -> 25000).
+    video_timescale = 90000
+    tb = v.get("time_base") or ""
+    if "/" in tb:
+        tb_num, tb_den = tb.split("/", 1)
+        if tb_num.strip() == "1" and tb_den.strip().isdigit() and int(tb_den) > 0:
+            video_timescale = int(tb_den)
+
     encoder = _video_encoder(v.get("codec_name"))
 
     packshot_norm = work_dir / "packshot_norm.mp4"
@@ -96,7 +107,7 @@ async def append_packshot(video_url: str, packshot_url: str, work_dir: Path) -> 
         norm_args += ["-c:a", a_enc, "-ar", sample_rate, "-ac", str(channels), "-shortest"]
     else:
         norm_args += ["-an"]
-    norm_args += ["-video_track_timescale", "90000", str(packshot_norm)]
+    norm_args += ["-video_track_timescale", str(video_timescale), str(packshot_norm)]
     await run_ffmpeg(norm_args, desc="normalize packshot to source params")
 
     # --- Concat -c copy (le film n'est PAS re-encode) ---
@@ -106,7 +117,9 @@ async def append_packshot(video_url: str, packshot_url: str, work_dir: Path) -> 
     try:
         await run_ffmpeg(
             ["-f", "concat", "-safe", "0", "-i", str(concat_list),
-             "-c", "copy", "-movflags", "+faststart", str(out)],
+             "-fflags", "+genpts",
+             "-c", "copy", "-video_track_timescale", str(video_timescale),
+             "-movflags", "+faststart", str(out)],
             desc="concat film + packshot (-c copy, no recompress)",
         )
         # Sanity : le fichier doit exister, ne pas etre vide, et etre plus long
