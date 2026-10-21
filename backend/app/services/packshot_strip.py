@@ -74,6 +74,48 @@ async def _keyframes_between(path: Path, start: float, end: float) -> list[float
     return sorted(out)
 
 
+async def _end_before_keyframe(path: Path, kf_pts: float) -> float | None:
+    """Borne -to qui exclut la keyframe du raccord en `-c copy`.
+
+    En stream copy, ffmpeg coupe sur l'ordre de DECODAGE (dts), pas sur l'ordre
+    d'affichage. Avec des B-frames, la keyframe du packshot a un dts ~2 images
+    AVANT son pts : un -to sur son pts (ou juste en dessous) la garde, et la
+    sortie finit sur 1-3 images du packshot (1re image du fondu). On coupe donc
+    a mi-chemin entre le dts du paquet precedent et celui de la keyframe.
+    """
+    result = await asyncio.to_thread(
+        subprocess.run,
+        [
+            "ffprobe", "-v", "quiet",
+            "-select_streams", "v:0",
+            "-show_entries", "packet=pts_time,dts_time,flags",
+            "-read_intervals", f"{max(0.0, kf_pts - 2.0):.3f}%{kf_pts + 1.0:.3f}",
+            "-print_format", "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    try:
+        packets = json.loads(result.stdout or "{}").get("packets", [])
+    except json.JSONDecodeError:
+        return None
+    prev_dts = None
+    for p in packets:
+        try:
+            pts = float(p["pts_time"])
+            dts = float(p["dts_time"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if "K" in p.get("flags", "") and abs(pts - kf_pts) < 0.002:
+            if prev_dts is None:
+                return None
+            return (prev_dts + dts) / 2
+        prev_dts = dts
+    return None
+
+
 async def strip_packshot(video_url: str, packshot_url: str, work_dir: Path) -> Path:
     """Telecharge film+packshot, coupe le packshot de la fin en -c copy.
     Retourne le mp4 du film nu."""
@@ -117,9 +159,18 @@ async def strip_packshot(video_url: str, packshot_url: str, work_dir: Path) -> P
             f"{estimate:.3f}s, coupe a l'estimation"
         )
 
+    end_at = cut_at
+    if kfs:
+        bound = await _end_before_keyframe(film, cut_at)
+        if bound is not None:
+            end_at = bound
+            logger.info(f"strip_packshot: -to {end_at:.6f}s (dts avant la keyframe)")
+        else:
+            logger.warning("strip_packshot: dts de la keyframe introuvable, -to sur son pts")
+
     out = work_dir / "film_nu.mp4"
     await run_ffmpeg(
-        ["-i", str(film), "-to", f"{cut_at:.3f}", "-c", "copy",
+        ["-i", str(film), "-to", f"{end_at:.6f}", "-c", "copy",
          "-movflags", "+faststart", str(out)],
         desc="strip packshot (-c copy, no recompress)",
     )
