@@ -160,6 +160,17 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         else:
             actual_duration = await get_duration(clip_path)
 
+        # Photos animees : Kling rend un clip de ~5s pour un plan de 2.5-5s.
+        # On COUPE le clip (-t) au lieu de compresser le temps : setpts
+        # accelerait la camera (x1.25 a 4s, x1.67 a 3s, x2 a 2.5s -> dollys et
+        # drones "bien trop rapides"). On ne garde setpts (ralenti, > 1) que
+        # si le clip est PLUS COURT que le plan.
+        photo_trim = (
+            start_seconds is None and actual_duration > target_duration + 0.01
+        )
+        if photo_trim:
+            actual_duration = float(target_duration)
+
         pts_factor = target_duration / actual_duration
         atempo = 1.0 / pts_factor
         atempo_filters = _build_atempo_chain(atempo)
@@ -196,7 +207,7 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         if start_seconds is not None:
             args.extend(["-ss", str(start_seconds)])
         args.extend(["-i", str(clip_path)])
-        if start_seconds is not None:
+        if start_seconds is not None or photo_trim:
             args.extend(["-t", str(clip.duree_secondes)])
         args.extend([
             "-vf", vf,
