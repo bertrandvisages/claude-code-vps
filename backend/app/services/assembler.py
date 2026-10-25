@@ -1,4 +1,5 @@
 """Assemblage vidéo via FFmpeg : download, speed adjust, concat, audio ducking."""
+import re
 
 import asyncio
 import json
@@ -267,6 +268,10 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
             desc="copy final",
         )
 
+    # --- 4b. Niveau final du mix (cible -14 LUFS, crete -1 dBTP), avant le
+    # packshot (silencieux, concatene en -c copy).
+    await _finalize_loudness(job_id, mixed_path, request.audio_config, vc)
+
     # --- 5. Packshot silencieux concat a la fin ---
     if request.packshot_url:
         emit(job_id, "pipeline", "info", "Telechargement packshot...")
@@ -318,6 +323,52 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
 
     emit(job_id, "pipeline", "success", f"Vidéo finale : {output_filename}")
     return output_path
+
+
+async def _measure_integrated_lufs(path: Path) -> float | None:
+    """Loudness integree (EBU R128) du fichier, via ffmpeg ebur128. None si pas d'audio."""
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-hide_banner", "-nostats", "-i", str(path),
+        "-af", "ebur128=peak=true", "-f", "null", "-",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    _, err = await proc.communicate()
+    summary = err.decode(errors="ignore").split("Summary")[-1]
+    m = re.search(r"I:\s+(-?[\d.]+) LUFS", summary)
+    return float(m.group(1)) if m else None
+
+
+async def _finalize_loudness(job_id: str, path: Path, ac: AudioConfig, vc: VideoConfig) -> None:
+    """Amene le mix a ac.final_loudnorm_target LUFS par un GAIN LINEAIRE mesure,
+    puis limite les cretes a ac.final_true_peak dBTP. Video copiee (-c:v copy).
+
+    Pourquoi pas loudnorm en 2e passe : des que la plage de niveau (LRA) du mix
+    depasse sa cible, loudnorm repasse en mode dynamique et ecrase l'ecart
+    voix / musique. Un gain constant + limiteur preserve la dynamique voulue
+    (musique seule ~1,5 dB sous la voix, ducking sous la voix).
+    """
+    target = ac.final_loudnorm_target
+    if target is None:
+        return
+    measured = await _measure_integrated_lufs(path)
+    if measured is None or measured < -60:
+        emit(job_id, "ffmpeg", "info", "Niveau final : pas d'audio mesurable, inchange")
+        return
+    gain_db = target - measured
+    limit = 10 ** (ac.final_true_peak / 20)
+    tmp = path.with_name(f"norm_{path.name}")
+    await run_ffmpeg(
+        ["-i", str(path), "-c:v", "copy",
+         "-af", f"volume={gain_db:.2f}dB,alimiter=limit={limit:.3f}:attack=5:release=60:level=false",
+         "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
+         "-movflags", vc.movflags, str(tmp)],
+        desc="final loudness (gain + limiter)",
+    )
+    tmp.replace(path)
+    final = await _measure_integrated_lufs(path)
+    emit(job_id, "ffmpeg", "success",
+         f"Niveau final : {measured:.1f} -> {final if final is None else round(final, 1)} LUFS "
+         f"(cible {target}, gain {gain_db:+.1f} dB, cretes <= {ac.final_true_peak} dBTP)")
 
 
 def _build_segments_filter(

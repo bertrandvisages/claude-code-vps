@@ -28,14 +28,25 @@ class VoiceoverSegment(BaseModel):
 
 class AudioConfig(BaseModel):
     voiceover_volume: float = 1.0
-    music_volume: float = 1.0
+    # Musique normalisee a music_loudnorm_target puis x music_volume : 0.56
+    # (-5 dB) place la musique seule ~1,5 dB sous les passages de voix (voix
+    # normalisee a -16 LUFS). 2.0 (ancien reglage app-vod) la mettait a -8 LUFS,
+    # plus fort que la voix.
+    music_volume: float = 0.56
     music_fade_in_seconds: float = 3
     music_fade_out_seconds: float = 5
-    sidechain_threshold: float = 0.02
-    sidechain_ratio: float = 2
-    sidechain_attack: float = 100
-    sidechain_release: float = 80
+    # Ducking : voix (x3) en sidechain ; ratio 6 => ~16 dB de reduction sous
+    # la voix, attaque rapide, relachement 400 ms.
+    sidechain_threshold: float = 0.05
+    sidechain_ratio: float = 6
+    sidechain_attack: float = 50
+    sidechain_release: float = 400
     music_loudnorm_target: float = -14
+    # Niveau FINAL du mix (apres voix + musique) : gain lineaire mesure
+    # (ebur128) vers la cible, puis limiteur a final_true_peak. Conserve la
+    # dynamique voix/musique (pas de loudnorm dynamique). None = desactive.
+    final_loudnorm_target: float | None = -14
+    final_true_peak: float = -1
     resample_rate: int = 44100
     output_codec: str = "aac"
     output_bitrate: str = "192k"
