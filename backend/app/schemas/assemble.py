@@ -65,6 +65,9 @@ class VideoConfig(BaseModel):
     # corrompu" a la lecture + raccord concat -c copy casse au packshot.
     pix_fmt: str = "yuv420p"
     movflags: str = "+faststart"
+    # Fondu au noir en fin de film (sur le packshot s'il y en a un, sinon sur
+    # le dernier plan). 0 = desactive.
+    fade_out_seconds: float = 1.5
 
 
 class AssembleRequest(BaseModel):

@@ -262,11 +262,20 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         await _mix_audio(job_id, work_dir, concat_video, request, total_duration, mixed_path)
     else:
         emit(job_id, "ffmpeg", "info", "Pas d'audio externe, conservation audio clips")
-        await run_ffmpeg(
-            ["-i", str(concat_video), "-c", "copy",
-             "-movflags", vc.movflags, str(mixed_path)],
-            desc="copy final",
-        )
+        fade_vf = "" if request.packshot_url else _fade_out_vf(total_duration, vc)
+        if fade_vf:
+            await run_ffmpeg(
+                ["-i", str(concat_video), "-vf", fade_vf,
+                 "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf), "-pix_fmt", vc.pix_fmt,
+                 "-c:a", "copy", "-movflags", vc.movflags, str(mixed_path)],
+                desc="copy final + fondu au noir",
+            )
+        else:
+            await run_ffmpeg(
+                ["-i", str(concat_video), "-c", "copy",
+                 "-movflags", vc.movflags, str(mixed_path)],
+                desc="copy final",
+            )
 
     # --- 4b. Niveau final du mix (cible -14 LUFS, crete -1 dBTP), avant le
     # packshot (silencieux, concatene en -c copy).
@@ -279,11 +288,16 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         await download_file(request.packshot_url, packshot_raw)
 
         # Re-encode packshot pour matcher fps/codec/dimensions + audio silence stereo
+        # + fondu au noir sur ses dernieres secondes (fin du film).
         packshot_norm = work_dir / "packshot_norm.mp4"
+        pk_fade = _fade_out_vf(await get_duration(packshot_raw), vc)
+        pk_vf = f"scale=w={vc.width}:h={vc.height}:force_original_aspect_ratio=increase,crop={vc.width}:{vc.height},setsar=1"
+        if pk_fade:
+            pk_vf = f"{pk_vf},{pk_fade}"
         await run_ffmpeg(
             ["-i", str(packshot_raw),
              "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate={ac.resample_rate}",
-             "-vf", f"scale=w={vc.width}:h={vc.height}:force_original_aspect_ratio=increase,crop={vc.width}:{vc.height},setsar=1",
+             "-vf", pk_vf,
              "-r", str(vc.fps),
              "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf), "-pix_fmt", vc.pix_fmt,
              "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
@@ -323,6 +337,14 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
 
     emit(job_id, "pipeline", "success", f"Vidéo finale : {output_filename}")
     return output_path
+
+
+def _fade_out_vf(total_duration: float, vc: VideoConfig) -> str:
+    """Filtre video de fondu au noir sur les dernieres vc.fade_out_seconds ("" si 0)."""
+    d = float(getattr(vc, "fade_out_seconds", 0) or 0)
+    if d <= 0 or total_duration <= d:
+        return ""
+    return f"fade=t=out:st={max(0.0, total_duration - d):.3f}:d={d:.3f}"
 
 
 async def _measure_integrated_lufs(path: Path) -> float | None:
@@ -419,6 +441,10 @@ async def _mix_audio(
     """Télécharge et mixe voix off + musique avec ducking automatique."""
     ac = request.audio_config
     vc = request.video_config
+    # Fondu au noir final : ici si le film se termine sur le dernier plan ;
+    # sur le packshot sinon (il est concatene apres, en -c copy).
+    fade_vf = "" if request.packshot_url else _fade_out_vf(total_duration, vc)
+    fade_args = ["-vf", fade_vf] if fade_vf else []
 
     vo_path = None
     music_path = None
@@ -480,6 +506,7 @@ async def _mix_audio(
             ["-i", str(video_path), "-i", str(vo_path), "-i", str(music_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[aout]",
+             *fade_args,
              "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf), "-pix_fmt", vc.pix_fmt,
              "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
              "-movflags", vc.movflags,
@@ -500,6 +527,7 @@ async def _mix_audio(
             ["-i", str(video_path), "-i", str(vo_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[aout]",
+             *fade_args,
              "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf), "-pix_fmt", vc.pix_fmt,
              "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
              "-movflags", vc.movflags,
@@ -536,6 +564,7 @@ async def _mix_audio(
             ["-i", str(video_path), "-i", str(vo_path), "-i", str(music_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[aout]",
+             *fade_args,
              "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf), "-pix_fmt", vc.pix_fmt,
              "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
              "-movflags", vc.movflags,
@@ -550,6 +579,7 @@ async def _mix_audio(
         await run_ffmpeg(
             ["-i", str(video_path), "-i", str(vo_path),
              "-map", "0:v", "-map", "1:a",
+             *fade_args,
              "-c:v", "copy",
              "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
              "-movflags", vc.movflags,
@@ -575,6 +605,7 @@ async def _mix_audio(
             ["-i", str(video_path), "-i", str(music_path),
              "-filter_complex", filter_complex,
              "-map", "0:v", "-map", "[music]",
+             *fade_args,
              "-c:v", "copy",
              "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
              "-movflags", vc.movflags,
