@@ -3,6 +3,7 @@ import re
 
 import asyncio
 import json
+import math
 import logging
 import subprocess
 from pathlib import Path
@@ -339,6 +340,74 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
     return output_path
 
 
+# Raccord de boucle de la musique : Suno ne respecte pas la duree demandee
+# (Sicile 28/10/2026 : 122 s pour un film de 188 s) et aloop recollait la fin
+# (fondu de sortie, silence) au debut : creux de 11 a 26 dB au raccord.
+MUSIC_LOOP_CROSSFADE_S = 1.0
+
+
+async def _rms_windows(path: Path, window_s: float) -> list[float]:
+    """Niveau RMS (dB) par fenetre de `window_s` secondes (mono 8 kHz)."""
+    sr = 8000
+    result = await asyncio.to_thread(
+        subprocess.run,
+        ["ffmpeg", "-v", "error", "-i", str(path), "-ac", "1", "-af",
+         f"aresample={sr},asetnsamples={int(sr * window_s)},astats=metadata=1:reset=1,"
+         "ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
+         "-f", "null", "-"],
+        capture_output=True, text=True, timeout=120,
+    )
+    return [-120.0 if v.endswith("inf") else float(v) for v in re.findall(r"RMS_level=(-?inf|-?[0-9.]+)", result.stdout)]
+
+
+async def _loop_music_crossfade(job_id: str, music_path: Path, total_duration: float, work_dir: Path) -> Path:
+    """Musique plus courte que le film : fondu de sortie et silence de debut
+    retires, puis copies enchainees par un fondu rapide. Renvoie le fichier a
+    mixer (l'original s'il est assez long)."""
+    dur = await get_duration(music_path)
+    if dur >= total_duration:
+        return music_path
+    # Fin utile : derniere fenetre de 0,25 s a moins de 6 dB du niveau median
+    # (le fondu de sortie Suno dure 2 a 3 s au-dessus de -35 dB : un seuil
+    # fixe le laissait, creux de ~7 dB au raccord).
+    levels = await _rms_windows(music_path, 0.25)
+    end = dur
+    if levels:
+        med = sorted(levels)[len(levels) // 2]
+        last = max((i for i, v in enumerate(levels) if v >= med - 6), default=len(levels) - 1)
+        end = min(dur, (last + 1) * 0.25)
+    trimmed = work_dir / "music_trimmed.wav"
+    await run_ffmpeg(
+        ["-i", str(music_path), "-af",
+         f"atrim=0:{end:.3f},silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.05",
+         str(trimmed)],
+        desc="musique: bords",
+    )
+    tdur = await get_duration(trimmed)
+    xf = MUSIC_LOOP_CROSSFADE_S
+    if tdur <= 3 * xf:
+        return music_path
+    copies = math.ceil((total_duration - tdur) / (tdur - xf)) + 1
+    inputs: list[str] = []
+    for _ in range(copies):
+        inputs += ["-i", str(trimmed)]
+    chain = []
+    prev = "[0:a]"
+    for i in range(1, copies):
+        out = f"[x{i}]"
+        chain.append(f"{prev}[{i}:a]acrossfade=d={xf}:c1=tri:c2=tri{out}")
+        prev = out
+    looped = work_dir / "music_looped.wav"
+    await run_ffmpeg(
+        inputs + ["-filter_complex", ";".join(chain), "-map", prev, str(looped)],
+        desc="musique: boucle en fondu",
+    )
+    emit(job_id, "ffmpeg", "info",
+         f"Musique {dur:.1f}s < film {total_duration:.1f}s : {copies} copies "
+         f"({tdur:.1f}s sans silences) enchainees en fondu de {xf}s")
+    return looped
+
+
 def _fade_out_vf(total_duration: float, vc: VideoConfig) -> str:
     """Filtre video de fondu au noir sur les dernieres vc.fade_out_seconds ("" si 0)."""
     d = float(getattr(vc, "fade_out_seconds", 0) or 0)
@@ -458,6 +527,10 @@ async def _mix_audio(
         emit(job_id, "pipeline", "info", "Téléchargement musique...")
         music_path = work_dir / "music.mp3"
         await download_file(request.music_url, music_path)
+        try:
+            music_path = await _loop_music_crossfade(job_id, music_path, total_duration, work_dir)
+        except Exception as e:  # la boucle brute (aloop) reste le repli
+            emit(job_id, "ffmpeg", "warning", f"Boucle musique en fondu impossible ({e}), aloop brut")
 
     segments = request.voiceover_segments
 
