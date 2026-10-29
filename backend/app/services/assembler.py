@@ -138,6 +138,8 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
     # une keyframe). Pour les photos animees, -ss/-t omis : tout le clip est traite.
     emit(job_id, "ffmpeg", "info", "Cut + ajustement vitesse + résolution des clips...")
     adjusted_paths: list[Path] = []
+    # Meme condition que l'etape 4 : avec voix ou musique, le son des clips est remplace.
+    keep_clip_audio = not (request.voiceover_url or request.voiceover_segments or request.music_url)
     for i, (clip_path, clip) in enumerate(zip(clip_paths, clips)):
         adjusted = work_dir / f"adj_{i:03d}.mp4"
         target_duration = clip.duree_secondes
@@ -211,13 +213,25 @@ async def assemble_video(job_id: str, request: AssembleRequest, work_dir: Path) 
         args.extend(["-i", str(clip_path)])
         if start_seconds is not None or photo_trim:
             args.extend(["-t", str(clip.duree_secondes)])
+        # Son des clips : seulement s'il sert (pas de voix ni de musique). Le
+        # mixage ne garde que l'image des clips (-map 0:v), et leur piste AAC
+        # deborde de ~23 ms (trames de 1024 echantillons) : le concat -c copy
+        # cale chaque clip sur la fin de ce son, les coupes prenaient +23 ms
+        # par plan (Tromso 66613146 : images 0,57 s en retard sur la voix a
+        # la fin du film).
+        if keep_clip_audio:
+            audio_args = [
+                "-af", atempo_filters,
+                "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
+                "-ar", str(ac.resample_rate),
+            ]
+        else:
+            audio_args = ["-an"]
         args.extend([
             "-vf", vf,
-            "-af", atempo_filters,
+            *audio_args,
             "-r", str(vc.fps),
             "-c:v", vc.codec, "-preset", vc.preset, "-crf", str(vc.crf), "-pix_fmt", vc.pix_fmt,
-            "-c:a", ac.output_codec, "-b:a", ac.output_bitrate,
-            "-ar", str(ac.resample_rate),
             "-avoid_negative_ts", "make_zero",
             str(adjusted),
         ])
